@@ -1,0 +1,11 @@
+{
+  "name": "bouton-signaler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Un bouton 🐞 qui photographie l'écran, prend la parole et envoie le tout à une routine Claude Code qui corrige.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/relais.test.mjs && node tests/bouton.navigateur.mjs"
+  }
+}

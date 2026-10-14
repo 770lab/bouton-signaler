@@ -1,0 +1,21 @@
+# Le relais « 🐞 Signaler » sur Cloudflare Workers. Adapter les [vars], puis, DEPUIS CE DOSSIER (relay/cloudflare/, voir INSTALL.md) :
+#   npx wrangler r2 bucket create signaler-pieces
+#   npx wrangler secret put ROUTINE_URL      # https://api.anthropic.com/v1/claude_code/routines/trig_…/fire
+#   npx wrangler secret put ROUTINE_JETON    # le jeton de la routine (sk-ant-oat01-…)
+#   npx wrangler secret put CLES             # marie:<clé>,paul:<clé>
+#   npx wrangler deploy
+name = "bouton-signaler"
+main = "worker.mjs"
+compatibility_date = "2025-09-01"
+
+[vars]
+# Les adresses EXACTES des pages qui portent le bouton (schéma + domaine + port), séparées par des virgules.
+ORIGINES = "https://app.exemple.fr"
+# Le dépôt GitHub que la routine doit corriger, recopié dans chaque signalement.
+DEPOT = "proprietaire/depot"
+# « oui » : la page affiche le lien de la session Claude après l'envoi (utile si seuls des admins signalent).
+MONTRER_SUIVI = "non"
+
+[[r2_buckets]]
+binding = "PIECES"
+bucket_name = "signaler-pieces"
