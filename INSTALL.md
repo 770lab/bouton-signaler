@@ -1,7 +1,7 @@
 # Installer le bouton « 🐞 Signaler » — instructions pour Claude
 
 Ce fichier est écrit pour **Claude Code**. Le propriétaire du projet t'a dit quelque chose comme :
-« Installe le bouton Signaler depuis https://github.com/<ce-dépôt> dans mon projet ». Suis ces étapes dans l'ordre, dans le dépôt
+« Installe le bouton Signaler depuis https://github.com/770lab/bouton-signaler dans mon projet ». Suis ces étapes dans l'ordre, dans le dépôt
 **du projet** (pas dans celui-ci). Parle au propriétaire dans sa langue, simplement : ce n'est pas forcément un développeur.
 
 ## Ce que tu installes

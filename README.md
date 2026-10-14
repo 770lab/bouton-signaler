@@ -13,7 +13,7 @@ Quand la correction est en ligne, on rafraîchit la page.
 
 Dans une session Claude Code ouverte sur **votre** projet, dites :
 
-> Installe le bouton Signaler depuis https://github.com/OWNER/bouton-signaler dans ce projet : suis son INSTALL.md.
+> Installe le bouton Signaler depuis https://github.com/770lab/bouton-signaler dans ce projet : suis son INSTALL.md.
 
 Claude ajoute le bouton, prépare le relais, génère les clés d'équipe et vous guide pour créer la routine sur **votre** compte
 Claude (c'est vous qui créez le jeton et le posez en secret : Claude ne le voit jamais).
