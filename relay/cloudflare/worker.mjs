@@ -1,16 +1,34 @@
 // Le relais « 🐞 Signaler » en Cloudflare Worker (offre gratuite suffisante). Il reçoit le signalement de la page, range captures et
-// note vocale dans R2, et prévient la routine Claude Code. Réglages (voir wrangler.toml et INSTALL.md) :
+// note vocale (R2 ou Workers KV), et prévient la routine Claude Code. Réglages (voir wrangler.toml et INSTALL.md) :
 //   vars    ORIGINES  les adresses des pages autorisées, séparées par des virgules (« https://app.exemple.fr »)
 //           DEPOT     le dépôt GitHub à corriger (« proprietaire/depot »), recopié dans le texte de la routine
 //   secrets ROUTINE_URL   https://api.anthropic.com/v1/claude_code/routines/trig_…/fire
 //           ROUTINE_JETON le jeton de CETTE routine (sk-ant-oat01-…)
 //           CLES          les clés d'équipe : « marie:<clé>,paul:<clé> » (16 caractères au moins chacune)
-//   R2      PIECES (facultatif) : sans lui, le signalement part sans les fichiers, et le texte le dit
+//   stockage (facultatif) : R2 PIECES, ou Workers KV PIECES_KV (inclus dans l'offre gratuite, sans abonnement R2 ; fichiers
+//           effacés après 30 jours). Sans stockage, le signalement part sans les fichiers, et le texte le dit
 //
 // Routes : POST /signaler · GET /piece/<id> (une capture ou la note, sous une adresse de 128 bits) · OPTIONS (CORS)
 import * as C from '../coeur.mjs';
 
 const PIECE_RX = /^\/piece\/([0-9a-f]{32})$/;
+const KV_DUREE_S = 30 * 24 * 3600;
+
+// Le stockage des pièces, sous la forme de R2 ({ put, get → { body, httpMetadata } }). Workers KV (PIECES_KV) est ramené à la même
+// forme : chaque pièce s'efface d'elle-même au bout de 30 jours.
+function stockage(env) {
+  if (env.PIECES) return env.PIECES;
+  const kv = env.PIECES_KV;
+  if (!kv) return null;
+  return {
+    put: (id, octets, o) => kv.put(id, octets, { expirationTtl: KV_DUREE_S,
+      metadata: Object.assign({ contentType: o.httpMetadata.contentType }, o.customMetadata || {}) }),
+    get: async (id) => {
+      const r = await kv.getWithMetadata(id, { type: 'arrayBuffer' });
+      return r && r.value !== null ? { body: r.value, httpMetadata: { contentType: (r.metadata || {}).contentType } } : null;
+    },
+  };
+}
 
 function entetesCors(req, env) {
   const o = req.headers.get('Origin') || '';
@@ -40,10 +58,11 @@ export async function signaler(req, env, outils) {
   const lu = C.lireSignalement(corps);
   if (!lu.ok) return json({ ok: false, erreur: lu.erreur }, 400, cors);
   const s = lu.s, ref = C.nouvelId().slice(0, 12), base = new URL(req.url).origin, pieces = [];
-  if (env.PIECES) {
+  const st = stockage(env);
+  if (st) {
     const ranger = async (genre, mime, octets, extra) => {
       const id = C.nouvelId();
-      await env.PIECES.put(id, octets, { httpMetadata: { contentType: mime }, customMetadata: { ref: ref, genre: genre } });
+      await st.put(id, octets, { httpMetadata: { contentType: mime }, customMetadata: { ref: ref, genre: genre } });
       pieces.push(Object.assign({ genre: genre, url: base + '/piece/' + id }, extra || {}));
     };
     for (const c of s.captures) await ranger('image', c.mime, c.octets, { ou: c.ou });
@@ -58,8 +77,9 @@ export async function signaler(req, env, outils) {
 }
 
 async function piece(id, env) {
-  if (!env.PIECES) return new Response('introuvable', { status: 404 });
-  const o = await env.PIECES.get(id);
+  const st = stockage(env);
+  if (!st) return new Response('introuvable', { status: 404 });
+  const o = await st.get(id);
   if (!o) return new Response('introuvable', { status: 404 });
   return new Response(o.body, { headers: { 'Content-Type': (o.httpMetadata && o.httpMetadata.contentType) || 'application/octet-stream',
     'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' } });

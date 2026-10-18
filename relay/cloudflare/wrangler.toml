@@ -1,9 +1,8 @@
-# Le relais « 🐞 Signaler » sur Cloudflare Workers. Adapter les [vars], puis, DEPUIS CE DOSSIER (relay/cloudflare/, voir INSTALL.md) :
-#   npx wrangler r2 bucket create signaler-pieces
-#   npx wrangler secret put ROUTINE_URL      # https://api.anthropic.com/v1/claude_code/routines/trig_…/fire
-#   npx wrangler secret put ROUTINE_JETON    # le jeton de la routine (sk-ant-oat01-…)
-#   npx wrangler secret put CLES             # marie:<clé>,paul:<clé>
-#   npx wrangler deploy
+# Le relais « Signaler à Claude » sur Cloudflare Workers. Adapter les [vars], puis, DEPUIS CE DOSSIER (relay/cloudflare/, voir INSTALL.md) :
+#   npx wrangler@4 deploy                     # crée tout seul le stockage Workers KV (inclus dans l'offre gratuite)
+#   npx wrangler@4 secret put ROUTINE_URL      # https://api.anthropic.com/v1/claude_code/routines/trig_…/fire
+#   npx wrangler@4 secret put ROUTINE_JETON    # le jeton de la routine (sk-ant-oat01-…)
+#   npx wrangler@4 secret put CLES             # marie:<clé>,paul:<clé>
 name = "bouton-signaler"
 main = "worker.mjs"
 compatibility_date = "2025-09-01"
@@ -16,6 +15,13 @@ DEPOT = "proprietaire/depot"
 # « oui » : la page affiche le lien de la session Claude après l'envoi (utile si seuls des admins signalent).
 MONTRER_SUIVI = "non"
 
-[[r2_buckets]]
-binding = "PIECES"
-bucket_name = "signaler-pieces"
+# Captures et notes vocales : Workers KV, inclus dans l'offre gratuite (sans abonnement R2), effacées après 30 jours.
+# Sans « id », wrangler 4 crée l'espace au premier « deploy » et note son id ici.
+[[kv_namespaces]]
+binding = "PIECES_KV"
+
+# Ou R2 (abonnement R2 à ajouter au compte, gratuit jusqu'à 10 Go) : retirer le bloc KV ci-dessus, créer le bucket
+# (npx wrangler@4 r2 bucket create signaler-pieces) et décommenter :
+# [[r2_buckets]]
+# binding = "PIECES"
+# bucket_name = "signaler-pieces"

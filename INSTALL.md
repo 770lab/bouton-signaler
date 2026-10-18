@@ -51,14 +51,15 @@ Copie le dossier `relay/` de ce dépôt dans le projet (par exemple `outils/sign
 
 ```bash
 cd outils/signaler-relais/cloudflare
-npx wrangler login                                  # le propriétaire se connecte à Cloudflare
-npx wrangler r2 bucket create signaler-pieces       # le stockage des captures
+npx wrangler@4 login                                # le propriétaire se connecte à Cloudflare
 # dans wrangler.toml : ORIGINES = l'adresse exacte des pages (https://…), DEPOT = proprietaire/depot
-npx wrangler deploy                                 # donne l'adresse du relais : https://bouton-signaler.<compte>.workers.dev
+npx wrangler@4 deploy                               # crée le stockage Workers KV (gratuit) et donne l'adresse du relais :
+                                                    # https://bouton-signaler.<compte>.workers.dev
 ```
 
-Les secrets viennent à l'étape 4 (une fois la routine créée). Conseille au propriétaire une **règle de cycle de vie** sur le
-bucket `signaler-pieces` (tableau de bord Cloudflare → R2 → le bucket → Settings → Object lifecycle rules : supprimer après 30 jours).
+Les secrets viennent à l'étape 4 (une fois la routine créée). Captures et notes vont dans Workers KV, inclus dans l'offre
+gratuite sans abonnement à ajouter, et s'effacent d'elles-mêmes après 30 jours. R2 reste possible (bloc commenté de
+`wrangler.toml`) : il demande d'ajouter l'abonnement R2 au compte (gratuit jusqu'à 10 Go, mais Cloudflare exige une carte).
 
 ### Option B — le serveur du projet (Node, Next.js, Express, Firebase, Deno…)
 
