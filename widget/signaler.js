@@ -142,7 +142,7 @@
       r.lang = document.documentElement.lang || 'fr-FR'; r.continuous = true; r.interimResults = true;
       r.onresult = function (ev) { var t = ''; for (var i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript; zone.value = avant + t; B.texte = zone.value; };
       r.onerror = function (ev) { dire(etat, ev && ev.error === 'not-allowed' ? 'Micro refusé : autorise-le dans le navigateur.' : 'La dictée s’est arrêtée.', 'ko'); };
-      r.onend = function () { dictee = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = '🎤 Dicter'; };
+      r.onend = function () { dictee = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Dicter'; };
       try { r.start(); dictee = r; bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la dictée'; dire(etat, 'À l’écoute… parle normalement.'); }
       catch (e) { dire(etat, 'Dictée impossible sur ce navigateur.', 'ko'); }
       return;
@@ -154,10 +154,10 @@
       rec.ondataavailable = function (e) { if (e.data && e.data.size) morceaux.push(e.data); };
       rec.onstop = function () {
         flux.getTracks().forEach(function (t) { t.stop(); });
-        enregistreur = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = '🎤 Note vocale';
+        enregistreur = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Note vocale';
         var blob = new Blob(morceaux, { type: rec.mimeType || 'audio/webm' }), s = Math.round((Date.now() - debut) / 1000);
         var lecteur = new FileReader();
-        lecteur.onload = function () { B.audio = { donnees: String(lecteur.result), duree: Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') }; dire(etat, '🎤 Note vocale jointe (' + B.audio.duree + ').', 'ok'); };
+        lecteur.onload = function () { B.audio = { donnees: String(lecteur.result), duree: Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') }; dire(etat, 'Note vocale jointe (' + B.audio.duree + ').', 'ok'); };
         lecteur.readAsDataURL(blob);
       };
       rec.start(); enregistreur = rec; bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la note';
@@ -187,14 +187,14 @@
       + '<div class="sgn-tete"><b id="sgn-titre">Signaler à Claude</b><button type="button" class="sgn-x" data-a="fermer" aria-label="Fermer">×</button></div>'
       + '<div class="sgn-types" role="group" aria-label="Type">'
       + '<button type="button" class="sgn-type" data-a="type" data-v="bug" aria-pressed="' + (B.type === 'bug') + '">Un bug</button>'
-      + '<button type="button" class="sgn-type" data-a="type" data-v="idee" aria-pressed="' + (B.type === 'idee') + '">💡 Une idée</button></div>'
+      + '<button type="button" class="sgn-type" data-a="type" data-v="idee" aria-pressed="' + (B.type === 'idee') + '">Une idée</button></div>'
       + '<div class="sgn-vignettes">' + B.captures.map(function (c, i) { return '<div class="sgn-v"><img src="' + c.donnees + '" alt="capture ' + (i + 1) + '"><button type="button" data-a="retirer" data-i="' + i + '" aria-label="Retirer la capture ' + (i + 1) + '">×</button></div>'; }).join('') + '</div>'
       + '<div class="sgn-rang">'
-      + '<button type="button" class="sgn-bouton" data-a="capturer"' + (B.captures.length >= CAPTURES_MAX ? ' disabled' : '') + '>📸 Capturer l’écran</button>'
-      + '<label class="sgn-bouton">🖼 Importer<input type="file" accept="image/*" multiple hidden data-a="importer"></label>'
-      + '<button type="button" class="sgn-bouton" data-a="micro" aria-pressed="false">' + (Reco ? '🎤 Dicter' : '🎤 Note vocale') + '</button></div>'
+      + '<button type="button" class="sgn-bouton" data-a="capturer"' + (B.captures.length >= CAPTURES_MAX ? ' disabled' : '') + '>Capturer l’écran</button>'
+      + '<label class="sgn-bouton">Importer<input type="file" accept="image/*" multiple hidden data-a="importer"></label>'
+      + '<button type="button" class="sgn-bouton" data-a="micro" aria-pressed="false">' + (Reco ? 'Dicter' : 'Note vocale') + '</button></div>'
       + '<textarea class="sgn-texte" data-a="texte" placeholder="' + (B.type === 'idee' ? 'Ton idée, en quelques mots…' : 'Qu’est-ce qui ne va pas ? Qu’attendais-tu ?') + '">' + h(B.texte) + '</textarea>'
-      + (B.audio ? '<p class="sgn-aide">🎤 Note vocale jointe (' + h(B.audio.duree) + ') · <a href="#" data-a="sansaudio">retirer</a></p>' : '')
+      + (B.audio ? '<p class="sgn-aide">Note vocale jointe (' + h(B.audio.duree) + ') · <a href="#" data-a="sansaudio">retirer</a></p>' : '')
       + (demandeCle ? '<input class="sgn-cle" data-a="cle" type="password" autocomplete="off" placeholder="Ta clé d’équipe (donnée par l’administrateur)"><p class="sgn-aide">Demandée une seule fois : elle reste dans ce navigateur.</p>' : '')
       + '<button type="button" class="sgn-envoyer" data-a="envoyer"' + (envoiEnCours ? ' disabled' : '') + '>Envoyer à Claude</button>'
       + '<div class="sgn-etat" role="status" aria-live="polite"></div></div>';
@@ -210,7 +210,7 @@
         else if (a === 'type') { B.type = el.getAttribute('data-v'); rendre(); }
         else if (a === 'retirer') { B.captures.splice(Number(el.getAttribute('data-i')), 1); rendre(); }
         else if (a === 'sansaudio') { e.preventDefault(); B.audio = null; rendre(); }
-        else if (a === 'capturer') { photographier().then(function (d) { ajouterCapture(d); rendre('📸 Capture ajoutée.', 'ok'); }, function () { rendre('La capture a échoué : importe une image à la place.', 'ko'); }); }
+        else if (a === 'capturer') { photographier().then(function (d) { ajouterCapture(d); rendre('Capture ajoutée.', 'ok'); }, function () { rendre('La capture a échoué : importe une image à la place.', 'ko'); }); }
         else if (a === 'micro') basculerMicro(el, zone, etat);
         else if (a === 'envoyer') envoyer(etat);
       });
@@ -239,7 +239,7 @@
         envoiEnCours = false;
         if (j && j.ok) {
           B = { type: 'bug', captures: [], texte: '', audio: null };
-          rendre('✅ Transmis à Claude (réf. ' + h(j.ref || '?') + '). La correction arrive ; tu seras prévenu par la mise à jour.', 'ok');
+          rendre('Transmis à Claude (réf. ' + h(j.ref || '?') + '). La correction arrive ; tu seras prévenu par la mise à jour.', 'ok');
           var b2 = fond && fond.querySelector('.sgn-envoyer'); if (b2) b2.disabled = true;
           setTimeout(function () { if (fond && !envoiEnCours) fermer(); }, 4000);
           return;
