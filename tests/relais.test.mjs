@@ -120,6 +120,36 @@ test('sans stockage R2 : le signalement part quand même, et le texte le dit', a
   assert.match(R.appels[0].corps.text, /pas gardée\(s\) : le relais n’a pas de stockage/);
 });
 
+// Un faux Workers KV, avec les signatures de Cloudflare : put(clé, valeur, { expirationTtl, metadata }), getWithMetadata(clé, { type }).
+function kv() {
+  const objets = new Map();
+  return { objets,
+    put: async (k, v, o) => { objets.set(k, { v: v, o: o }); },
+    getWithMetadata: async (k, o) => { assert.equal(o.type, 'arrayBuffer'); const x = objets.get(k); return x ? { value: x.v, metadata: x.o.metadata } : { value: null, metadata: null }; } };
+}
+
+test('stockage Workers KV (sans abonnement R2) : la capture est rangée 30 jours et servie avec son type', async () => {
+  const env = Object.assign(env0(), { PIECES: undefined, PIECES_KV: kv() }), R = routine();
+  const j = await (await signaler(requete(signalement()), env, R)).json();
+  assert.equal(j.ok, true);
+  assert.equal(env.PIECES_KV.objets.size, 1, 'la capture est rangée dans KV');
+  const [[id, rangee]] = [...env.PIECES_KV.objets.entries()];
+  assert.equal(rangee.o.expirationTtl, 30 * 24 * 3600, 'effacée d’elle-même après 30 jours');
+  assert.equal(rangee.o.metadata.contentType, 'image/png');
+  assert.equal(rangee.o.metadata.genre, 'image');
+  assert.ok(R.appels[0].corps.text.includes('https://relais.exemple.dev/piece/' + id));
+  const piece = await worker.fetch(new Request('https://relais.exemple.dev/piece/' + id), env);
+  assert.equal(piece.status, 200); assert.equal(piece.headers.get('Content-Type'), 'image/png');
+  assert.equal((await piece.arrayBuffer()).byteLength > 0, true);
+  assert.equal((await worker.fetch(new Request('https://relais.exemple.dev/piece/' + 'e'.repeat(32)), env)).status, 404);
+});
+
+test('R2 passe avant KV quand les deux sont branchés', async () => {
+  const env = Object.assign(env0(), { PIECES_KV: kv() }), R = routine();
+  await signaler(requete(signalement()), env, R);
+  assert.equal(env.PIECES.objets.size, 1); assert.equal(env.PIECES_KV.objets.size, 0);
+});
+
 test('CORS : la page autorisée reçoit les en-têtes, une autre non', async () => {
   const env = env0();
   const ok = await worker.fetch(new Request('https://relais.exemple.dev/signaler', { method: 'OPTIONS', headers: { Origin: ORIGINE } }), env);
