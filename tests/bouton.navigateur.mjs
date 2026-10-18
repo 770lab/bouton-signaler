@@ -79,7 +79,7 @@ try {
   ok(!!(await p.$('.sgn-cle')), 'la première fois, la clé d’équipe est demandée');
   await p.click('[data-a="capturer"]');
   await p.waitForFunction(() => document.querySelectorAll('.sgn-v img').length === 2, null, { timeout: 15000 });
-  ok(true, '« 📸 Capturer l’écran » ajoute une seconde capture');
+  ok(true, '« Capturer l’écran » ajoute une seconde capture');
   await p.fill('.sgn-texte', 'Le bouton Enregistrer ne fait rien sur le devis D-0042');
   await p.fill('.sgn-cle', CLE);
   await p.screenshot({ path: join(RACINE, 'tests', '.cache', 'fenetre-telephone.png') });
