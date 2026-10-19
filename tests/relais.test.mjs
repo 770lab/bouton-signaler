@@ -317,8 +317,17 @@ test('l’interrupteur : GET /etat (activé par défaut, sans clé), POST /etat 
 
   env = envKv(); const R = routine();
   assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), { ok: true, actif: true, depuis: null, par: null }, 'rien de rangé : activé');
+  // Une page hors d'ORIGINES (un projet oublié) LIT la réponse et apprend qu'elle n'est pas autorisée, au lieu de croire le relais
+  // injoignable ; elle ne reçoit pas les en-têtes du préliminaire, et les routes à clé lui restent fermées.
   const pirate = await appel(env, null, 'GET', '/etat', { cle: null, origine: 'https://pirate.fr' });
-  assert.equal(pirate.status, 200); assert.equal(pirate.headers.get('Access-Control-Allow-Origin'), null, 'lisible, mais pas de CORS pour une autre page');
+  assert.equal(pirate.status, 200); assert.equal(pirate.headers.get('Access-Control-Allow-Origin'), '*');
+  assert.equal(pirate.headers.get('Access-Control-Allow-Headers'), null); assert.equal(pirate.headers.get('Cache-Control'), 'no-store');
+  assert.match(pirate.headers.get('Vary') || '', /Origin/);
+  assert.deepEqual(await pirate.json(), { ok: true, actif: true, depuis: null, par: null, origine: false });
+  const preliminaire = await routeur(new Request(BASE + '/etat', { method: 'OPTIONS', headers: { Origin: 'https://pirate.fr' } }), env);
+  assert.equal(preliminaire.headers.get('Access-Control-Allow-Origin'), null, 'pas de préliminaire pour une autre page');
+  const sansOrigine = await appel(env, null, 'GET', '/etat', { cle: null, origine: null });
+  assert.deepEqual(await sansOrigine.json(), { ok: true, actif: true, depuis: null, par: null }, 'en ligne de commande : la réponse habituelle');
 
   rep = await appel(env, null, 'POST', '/etat', { corps: { actif: false }, cle: null });
   assert.equal(rep.status, 401); assert.equal((await rep.json()).cle, true);
@@ -337,6 +346,8 @@ test('l’interrupteur : GET /etat (activé par défaut, sans clé), POST /etat 
   const rangee = env.PIECES_KV.objets.get('etat');
   assert.equal(rangee.o && rangee.o.expirationTtl, undefined, 'l’interrupteur ne s’efface pas');
   assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), { ok: true, actif: false, depuis: j.depuis, par: 'marie' });
+  assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null, origine: 'https://pirate.fr' })).json(),
+    { ok: true, actif: false, depuis: null, par: null, origine: false }, 'une autre page voit l’état, pas qui l’a changé');
 
   rep = await appel(env, R, 'POST', '/signaler', { corps: signalement() });
   assert.equal(rep.status, 403);

@@ -207,8 +207,15 @@ export async function retour(req, env) {
 }
 
 // GET /etat : l'interrupteur, lisible par tous (sans clé) ; le bouton le lit avant de se montrer.
+// Une page hors d'ORIGINES le lit AUSSI (Access-Control-Allow-Origin « * », réponse sans clé ni secret), avec `origine: false` :
+// sans cela, le navigateur cache le refus et le bouton d'un projet oublié dans ORIGINES croit le relais injoignable, au lieu
+// de dire « page non autorisée ». Elle ne reçoit ni « depuis » ni « par » (le nom de qui a coupé) : elle n'en a pas besoin.
+// Les autres routes restent fermées à ces pages (pas d'en-têtes CORS, préliminaire OPTIONS refusé).
 export async function etat(req, env) {
-  return json(Object.assign({ ok: true }, await etatDuBouton(stockage(env))), 200, entetesCors(req, env));
+  const e = await etatDuBouton(stockage(env)), o = req.headers.get('Origin');
+  if (o && !C.origineAutorisee(o, env.ORIGINES))
+    return json({ ok: true, actif: e.actif, depuis: null, par: null, origine: false }, 200, { 'Vary': 'Origin', 'Access-Control-Allow-Origin': '*' });
+  return json(Object.assign({ ok: true }, e), 200, entetesCors(req, env));
 }
 
 // POST /etat { actif } : activer ou couper le bouton partout. Clé d'équipe exigée, d'où que vienne l'appel.

@@ -139,10 +139,21 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   curl -sS -X POST https://ADRESSE-DU-RELAIS/etat -H "Content-Type: application/json" -H "X-Signaler-Cle: <clé>" -d '{"actif":false}'
   ```
   (`{"actif":true}` pour le rallumer). La réponse dit depuis quand et par qui.
+  Une page dont l'adresse n'est pas dans `ORIGINES` peut lire `GET /etat` (et seulement cette route) : la réponse porte alors
+  `"origine": false` (sans « depuis » ni « par »), pour que le bouton dise « page non autorisée » au lieu de « relais injoignable ».
 
-**Mettre à jour une installation existante** : redéployer le relais (`npx wrangler@4 deploy` depuis `relay/cloudflare/`),
-recopier le nouveau `widget/signaler.js`, puis **recoller `routine/consignes.md` dans la routine** (claude.ai/code/routines) :
-avec les anciennes consignes, la routine traite le bloc RETOUR comme une donnée et ne renvoie rien. Les secrets ne changent pas.
+**Mettre à jour une installation existante** — les trois morceaux, sinon rien ne change pour personne (le relais neuf avec
+un ancien bouton n'affiche ni « Mes demandes » ni le badge ; le bouton neuf avec un ancien relais non plus) :
+
+1. **Le relais** : `npx wrangler@4 deploy` depuis `relay/cloudflare/` (le propriétaire, connecté à Cloudflare), avec le stockage
+   Workers KV branché (`PIECES_KV` dans `wrangler.toml`). Vérifier : `curl -sS https://ADRESSE-DU-RELAIS/etat` répond
+   `{"ok":true,"actif":true,…}`. « introuvable » = c'est encore l'ancien relais qui tourne.
+2. **Le bouton, dans CHAQUE projet qui le porte** : recopier le nouveau `widget/signaler.js` à la place de CHAQUE copie servie
+   (chercher `signaler.js` dans chaque dépôt : un projet peut en avoir plusieurs, ou une copie dans un autre dépôt qui le
+   publie), puis monter le `?v=` (ou le nom de fichier) de chaque balise `<script>` qui le charge : sans cela, téléphones et
+   cache gardent l'ancien. Vérifier sur la page en ligne : `typeof window.Signaler.demandes === 'function'`.
+3. **La routine** : recoller `routine/consignes.md` (claude.ai/code/routines) : avec les anciennes consignes, la routine traite
+   le bloc RETOUR comme une donnée et ne renvoie rien ; les demandes restent « en cours ». Les secrets ne changent pas.
 
 ## 6. Vérifier
 
@@ -152,7 +163,8 @@ avec les anciennes consignes, la routine traite le bloc RETOUR comme une donnée
 4. « Mes demandes » dans la fenêtre du bouton : l'essai y est « en cours », puis « rien à faire » quand la session a fini (elle a
    envoyé son RETOUR). Reste « en cours » : l'accès réseau de la routine n'autorise pas le relais, ou ses consignes sont anciennes.
 5. En cas d'échec, le message de la fenêtre dit où ça bloque :
-   - « page non autorisée » → `ORIGINES` ne contient pas l'adresse exacte de la page ;
+   - « page non autorisée » → `ORIGINES` ne contient pas l'adresse exacte de la page (schéma, domaine, port) ; ajoute-la et
+     redéploie le relais. Un bouton qui ne lit pas `"origine": false` dans `GET /etat` dit à la place « le relais est injoignable » ;
    - « clé d'équipe absente ou inconnue » → `CLES` ;
    - « le relais n'est pas encore relié à Claude » → `ROUTINE_URL` / `ROUTINE_JETON` ;
    - « Claude n'a pas pu être prévenu (routine 401…) » → jeton révoqué ou d'une autre routine ; `429` → plus de 30 envois en une heure ;
