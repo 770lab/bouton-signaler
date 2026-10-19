@@ -465,6 +465,22 @@ try {
   await e.p.evaluate(() => { window.__ouvert = true; window.Signaler.montrer(); });
   ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)) && faux.appelsEtat > lusEtat, 'puis Signaler.montrer() (déverrouillage, connexion) : le relais est interrogé et le rond paraît');
   await e.ctx.close();
+  // SignalerConfig.sansAlerte : une requête que la page affiche déjà elle-même (le pupitre et son Mac) reste dans la boîte noire,
+  // sans point rouge ni bulle ; une autre requête en échec allume toujours la bulle.
+  e = await page({ width: 390, height: 844 }, { cle: CLE, init: () => {
+    let v; Object.defineProperty(window, 'SignalerConfig', { configurable: true, get: () => v, set: (x) => { v = Object.assign({}, x, { sansAlerte: (u) => u.indexOf('127.0.0.1:9/') >= 0 }); } });
+  } });
+  await e.p.waitForSelector('.sgn-fab', { timeout: 5000 });
+  await e.p.evaluate(() => fetch('http://127.0.0.1:9/mac/robots').catch(() => null));
+  await e.p.waitForTimeout(600);
+  const muette = await e.p.evaluate(() => ({ bulle: !!document.querySelector('.sgn-bulle:not([hidden])') && getComputedStyle(document.querySelector('.sgn-bulle')).display !== 'none',
+    rouge: document.querySelector('.sgn-fab').classList.contains('sgn-alerte'), journal: window.Signaler._journal() }));
+  await e.p.evaluate(() => fetch('http://127.0.0.1:1/autre').catch(() => null));
+  const parle = await e.p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 }).then(() => true, () => false);
+  ok(!muette.bulle && !muette.rouge && /127\.0\.0\.1:9\/mac\/robots/.test(muette.journal) && parle,
+    'SignalerConfig.sansAlerte : la requête du Mac en échec reste dans la boîte noire sans bulle ni point rouge ; une autre allume la bulle'
+    + (muette.bulle || muette.rouge ? ' (alerte allumée pour la requête muette)' : '') + (parle ? '' : ' (pas de bulle pour l’autre)'));
+  await e.ctx.close();
   for (const [mode, dit] of [['on', 'allumé'], ['erreur', 'relais en erreur (500)'], ['absent', 'vieux relais sans /etat (404 sans CORS)']]) {
     faux.etat = mode;
     e = await page({ width: 390, height: 844 });

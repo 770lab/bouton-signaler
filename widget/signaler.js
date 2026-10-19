@@ -12,6 +12,8 @@
  *    position       'bas-droite' (défaut) ou 'bas-gauche'
  *    html2canvas    l'adresse de html2canvas si la page interdit cdnjs (CSP)
  *    visible        fonction : false pour cacher le bouton (ex. visiteurs non connectés)
+ *    sansAlerte     fonction (adresse complète) : true pour une requête dont la page affiche déjà l'échec elle-même (le pupitre et
+ *                   son Mac) ; elle reste dans la boîte noire, mais n'allume ni le point rouge ni la bulle
  *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam') ; sans réglage, d'après son adresse
  *                   (Signaler.projetDeLaPage) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
  *                   770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam, sinon aucun
@@ -262,7 +264,9 @@
       if (!/^https?:$/.test(u.protocol)) return;
       var cible = court(String(methode || 'GET').toUpperCase(), 10) + ' ' + court((u.origin === location.origin ? '' : u.host) + u.pathname, 150);
       consigner('requete', cible, statut ? 'statut ' + statut : 'pas de réponse (réseau)');
-      if (!statut || statut >= 500) alerter('requete:' + cible + ':' + statut, 'Une requête a échoué : ' + cible + (statut ? ' (erreur ' + statut + ')' : ' (pas de réponse du réseau)'));
+      var muet = false;
+      try { muet = typeof C.sansAlerte === 'function' && !!C.sansAlerte(u.href); } catch (e) {}
+      if (!muet && (!statut || statut >= 500)) alerter('requete:' + cible + ':' + statut, 'Une requête a échoué : ' + cible + (statut ? ' (erreur ' + statut + ')' : ' (pas de réponse du réseau)'));
     } catch (e) {}
   }
   if (fetchNatif) window.fetch = function (entree, init) {
