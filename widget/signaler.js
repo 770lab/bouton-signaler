@@ -15,8 +15,12 @@
  *
  *  L'interrupteur du pupitre : avant de montrer le rond, le bouton demande au relais s'il est coupé (GET /etat, 4 s au plus).
  *  Coupé : le rond n'apparaît pas. Relais muet, en erreur ou lent : le rond apparaît quand même (on ne bloque pas sur une panne).
+ *  Signaler.montrer() sur un bouton coupé redemande au relais : rallumé depuis le pupitre, il revient sans recharger la page ;
+ *  toujours coupé, il reste caché (une page qui appelle montrer() après une connexion ne passe pas outre l'interrupteur).
  *  « Mes demandes » : avec la clé d'équipe gardée, un petit nombre sur le rond compte les demandes « à traiter » (une question
  *  de Claude, une PR à relire, une demande pas partie) ; le toucher ouvre la liste (GET /demandes), le reste du rond photographie.
+ *  Une lecture sans réponse lisible est expliquée : réseau coupé, ou relais qui refuse CETTE page (adresse absente de ses ORIGINES,
+ *  ou relais pas encore à jour) ; GET /etat, public, peut le dire lui-même (« origine: false »).
  *
  *  API : window.Signaler.ouvrir() · .cacher() · .montrer() · .demandes(filtre)
  *        filtre = 'toutes' | 'traiter' | 'cours' ; sans filtre : « À traiter » s'il y en a, sinon toutes.
@@ -32,6 +36,14 @@
   var CLE_STOCKAGE = 'signaler_cle_v1';
   var CAPTURES_MAX = 6, LARGEUR_MAX = 1600, HAUTEUR_MAX = 2600, JPEG_Q = 0.8, AUDIO_MAX_MS = 180000, ETAT_DELAI_MS = 4000;
   var COUPE_MSG = 'Le bouton est coupé depuis le pupitre.';
+  // Pourquoi le relais ne répond pas : le navigateur ne lit pas une réponse sans CORS, il faut le dire en clair à la personne.
+  var MSG = {
+    origine: 'Page non autorisée : ce site n’est pas dans la liste du relais (ORIGINES).',
+    refus: 'Le relais répond, mais pas à cette page : son adresse n’est sans doute pas dans sa liste (ORIGINES), ou le relais n’est pas encore à jour pour « Mes demandes ».',
+    ancien: 'Le relais n’est pas encore à jour : il ne connaît pas « Mes demandes ». Il doit être redéployé.',
+    injoignable: 'Le relais est injoignable : vérifie la connexion, puis touche « Actualiser ».',
+    origineEnvoi: 'Cette page n’est pas autorisée par le relais (son adresse n’est pas dans sa liste, ORIGINES) : l’envoi sera refusé.',
+  };
 
   // ── LES DERNIÈRES ERREURS DE LA PAGE : souvent la moitié du diagnostic, et personne ne pense à les recopier ─────────────────
   var ERREURS = [];
@@ -130,7 +142,8 @@
   var B = { type: 'bug', captures: [], texte: '', audio: null };
   var fab = null, badge = null, fond = null, dictee = null, enregistreur = null, envoiEnCours = false;
   // pret : le relais a dit si le bouton est coupé (ou n'a pas répondu à temps) · coupe : coupé depuis le pupitre
-  var pret = false, coupe = false, cacheParPage = false;
+  // origineRefusee : le relais a dit (GET /etat) que cette page n'est pas dans sa liste
+  var pret = false, coupe = false, cacheParPage = false, origineRefusee = false;
 
   // ── LES APPELS AU RELAIS (sans cookie, jamais mis en cache) ────────────────────────────────────────────────────────────────
   // Rend le JSON de la réponse avec son statut ({ statut }), ou échoue si le relais est injoignable ou trop lent.
@@ -138,6 +151,7 @@
     o = o || {};
     var ctrl = window.AbortController ? new AbortController() : null, minuteur = null;
     var init = { method: o.methode || 'GET', credentials: 'omit', cache: 'no-store', headers: {} };
+    if (o.mode) init.mode = o.mode;
     if (o.cle) init.headers['X-Signaler-Cle'] = o.cle;
     if (o.corps !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(o.corps); }
     if (ctrl) init.signal = ctrl.signal;
@@ -148,7 +162,30 @@
     return p.then(function (j) { clearTimeout(minuteur); return j; }, function (e) { clearTimeout(minuteur); throw e; });
   }
   // L'interrupteur : seul un « actif: false » explicite cache le bouton. Le doute (panne, lenteur) le laisse paraître.
-  var verification = C.endpoint ? appel('/etat', { delai: ETAT_DELAI_MS }).then(function (j) { return !(j && j.actif === false); }, function () { return true; }) : Promise.resolve(true);
+  function lireEtat() {
+    if (!C.endpoint) return Promise.resolve(true);
+    return appel('/etat', { delai: ETAT_DELAI_MS }).then(function (j) {
+      if (j.origine === false) origineRefusee = true;
+      return !(j && j.actif === false);
+    }, function () { return true; });
+  }
+  var verification = lireEtat(), reverification = null;
+  // Une route du relais a échoué SANS réponse lisible. Le navigateur ne dit pas pourquoi (réseau coupé ou réponse sans CORS) :
+  // GET /etat, public, dit lui-même si la page est permise ; illisible lui aussi, une requête « opaque » (no-cors, rien n'est
+  // lu) n'échoue que si le relais est vraiment injoignable. Rend 'origine' | 'refus' | 'ancien' | 'reseau', gardé 30 s.
+  var diag = null;
+  function diagnostiquer() {
+    if (origineRefusee) return Promise.resolve('origine');
+    if (diag && Date.now() - diag.a < 30000) return diag.p;
+    var p = appel('/etat', { delai: ETAT_DELAI_MS }).then(function (j) {
+      if (j.origine === false) { origineRefusee = true; return 'origine'; }
+      return j.statut === 404 ? 'ancien' : 'reseau';
+    }, function () {
+      return appel('/etat', { mode: 'no-cors', delai: ETAT_DELAI_MS }).then(function () { return 'refus'; }, function () { return 'reseau'; });
+    });
+    diag = { a: Date.now(), p: p };
+    return p;
+  }
   function couper() {
     coupe = true;
     if (fab) { fab.remove(); fab = null; }
@@ -293,11 +330,12 @@
       } else if (j.statut === 401 || j.cle) {
         ecrire(CLE_STOCKAGE, ''); D.liste = null;
         D.erreur = 'Clé refusée : le relais ne la connaît pas. Tape à nouveau ta clé d’équipe.';
-      } else if (j.statut === 403) D.erreur = 'Page non autorisée : ce site n’est pas dans la liste du relais.';
+      } else if (j.statut === 403) D.erreur = MSG.origine;
       else if (j.statut === 503 || j.stockage === false) { D.liste = []; D.stockage = false; D.erreur = ''; }
+      else if (j.statut === 404) D.erreur = MSG.ancien;
       else D.erreur = 'Le relais a répondu une erreur (' + (j.erreur ? j.erreur + ', ' : '') + 'statut ' + j.statut + ').';
     }, function () {
-      if (n === numeroLecture) D.erreur = 'Le relais est injoignable : vérifie la connexion, puis touche « Actualiser ».';
+      return diagnostiquer().then(function (cause) { if (n === numeroLecture) D.erreur = MSG[cause] || MSG.injoignable; });
     }).then(function () { if (n === numeroLecture) { D.enCours = false; majCompteur(); } });
   }
   // Le nombre sur le rond et dans l'en-tête de la fenêtre.
@@ -349,7 +387,9 @@
       if (j.statut === 409) return ['Cette demande n’est plus « pas partie » : rien à renvoyer.', 'ko'];
       if (j.statut === 404) return ['Demande introuvable : elle a peut-être été effacée.', 'ko'];
       return ['Pas renvoyée : ' + (j.erreur || 'erreur ' + j.statut) + '.', 'ko'];
-    }, function () { return ['Pas renvoyée : le relais est injoignable.', 'ko']; }).then(function (m) {
+    }, function () {
+      return diagnostiquer().then(function (cause) { return ['Pas renvoyée : ' + (cause === 'reseau' ? 'le relais est injoignable.' : (MSG[cause] || '').replace(/^./, function (c) { return c.toLowerCase(); })), 'ko']; });
+    }).then(function (m) {
       return chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(m[0], m[1]); });
     });
   }
@@ -444,7 +484,7 @@
     rendus++;
     var avant = document.activeElement && fond.contains(document.activeElement) ? document.activeElement : null;
     var cleFocus = avant ? [avant.getAttribute('data-a'), avant.getAttribute('data-v'), avant.getAttribute('data-id')] : null;
-    if (vue === 'signaler' && coupe && !message) { message = COUPE_MSG; ton = 'ko'; }
+    if (vue === 'signaler' && !message && (coupe || origineRefusee)) { message = coupe ? COUPE_MSG : MSG.origineEnvoi; ton = 'ko'; }
     fond.innerHTML = '<div class="sgn-boite" role="dialog" aria-modal="true" aria-labelledby="sgn-titre">' + (vue === 'demandes' ? htmlDemandes() : htmlSignaler()) + '</div>';
     var etat = fond.querySelector('.sgn-etat');
     if (message) dire(etat, message, ton);
@@ -515,7 +555,15 @@
         var garde = !(j && j.cle) && !!lire(CLE_STOCKAGE);
         rendre('Pas envoyé : ' + ((j && j.erreur) || 'erreur') + '. Ton message est gardé : réessaie.', 'ko', garde && j.statut === 502);
         if (garde) chargerDemandes();   // une demande « pas partie » est peut-être gardée par le relais
-      }, function () { envoiEnCours = false; rendre('Pas envoyé : le relais ne répond pas. Ton message est gardé : réessaie.', 'ko'); });
+      }, function () {
+        // Sans réponse lisible : réseau coupé, ou page refusée par le relais (une réponse sans CORS) ; « Envoi… » le temps de savoir.
+        diagnostiquer().then(function (cause) {
+          envoiEnCours = false;
+          rendre(cause === 'origine' ? 'Pas envoyé : page non autorisée (ce site n’est pas dans la liste du relais, ORIGINES). Ton message est gardé.'
+            : cause === 'refus' ? 'Pas envoyé : le relais refuse cette page (son adresse n’est sans doute pas dans sa liste, ORIGINES). Ton message est gardé.'
+            : 'Pas envoyé : le relais ne répond pas. Ton message est gardé : réessaie.', 'ko');
+        });
+      });
   }
 
   function ouvrir() {
@@ -553,7 +601,19 @@
   window.Signaler = {
     ouvrir: function () { monter(); ouvrir(); },
     cacher: function () { cacheParPage = true; if (fab) fab.style.display = 'none'; majCompteur(); },
-    montrer: function () { cacheParPage = false; monter(); if (fab) fab.style.display = ''; majCompteur(); },
+    montrer: function () {
+      cacheParPage = false;
+      if (coupe && pret) {
+        // Coupé (au chargement ou par une réponse « coupé ») : on redemande au relais avant de montrer quoi que ce soit.
+        if (!reverification) reverification = lireEtat().then(function (actif) {
+          reverification = null;
+          if (!actif || cacheParPage) return;
+          coupe = false; monter(); if (fab) fab.style.display = ''; majCompteur();
+        });
+        return;
+      }
+      monter(); if (fab) fab.style.display = ''; majCompteur();
+    },
     demandes: function (filtre) { ouvrirDemandes(NOMS_FILTRE[String(filtre || '').toLowerCase()] || null); },
     _etat: function () { return B; },
   };

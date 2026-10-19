@@ -45,7 +45,10 @@ const fausseRoutine = async (url, init) => { appels.push(JSON.parse(init.body));
 
 // ── LE FAUX RELAIS des routes nouvelles, d'après le contrat ───────────────────────────────────────────────────────────────────
 // faux.etat : 'on' | 'off' | 'erreur' (500) | 'absent' (vieux relais : 404 sans CORS) | 'lent' (répond « coupé » après 6 s)
+// faux.etatOuvert : GET /etat lisible de partout (CORS « * ») et dit « origine: false » à une page absente des ORIGINES
+//   (la correction proposée côté relais) ; sinon, comme le contrat : CORS pour les origines permises seulement.
 // faux.demandes : 'normal' | 'sans-stockage' | 'injoignable' (connexion coupée) | 'interdit' (403) | 'erreur' (500)
+//   | 'absent' (vieux relais, d'avant « Mes demandes » : 404 sans CORS, comme le relais en ligne le 19/10)
 // faux.coupe : POST /signaler répond « coupé depuis le pupitre »
 const T0 = Date.now();
 const LONG = 'Sur la page des cartes, quand on ouvre une carte puis qu’on revient en arrière, la liste remonte tout en haut et on perd sa place. '
@@ -75,8 +78,8 @@ function demandesDeMarie() {
       liens: ['https://770lab.com/home/'], resume: 'Corrigé et en ligne.' }),
   ];
 }
-const faux = { etat: 'on', coupe: false, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [], entetesEtat: null };
-function remettre() { Object.assign(faux, { etat: 'on', coupe: false, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [] }); }
+const faux = { etat: 'on', etatOuvert: false, coupe: false, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [], entetesEtat: null };
+function remettre() { Object.assign(faux, { etat: 'on', etatOuvert: false, coupe: false, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [] }); }
 remettre();
 const publique = (x) => { const { retourHash, texteRoutine, ...p } = x; return p; };
 const RENVOI_RX = /^\/demandes\/([0-9a-f]{12})\/renvoyer$/;
@@ -87,9 +90,9 @@ const relais = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x'), origine = req.headers.origin || '';
   const permise = origine === ORIGINE;
   const cors = permise ? { 'Access-Control-Allow-Origin': ORIGINE, 'Vary': 'Origin' } : { 'Vary': 'Origin' };
-  const repondre = (statut, o, sansCors) => {
+  const repondre = (statut, o, entetes) => {
     if (res.destroyed || res.writableEnded) return;
-    res.writeHead(statut, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, sansCors ? {} : cors));
+    res.writeHead(statut, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, entetes || cors));
     res.end(JSON.stringify(o));
   };
   const qui = NOMS[String(req.headers['x-signaler-cle'] || '')];
@@ -100,13 +103,15 @@ const relais = http.createServer(async (req, res) => {
   if (req.method === 'GET' && u.pathname === '/etat') {
     faux.appelsEtat++; faux.entetesEtat = req.headers;
     if (faux.etat === 'absent') { res.writeHead(404); return res.end('introuvable'); }
-    if (faux.etat === 'erreur') return repondre(500, { ok: false });
-    if (faux.etat === 'lent') { await attendre(6000); return repondre(200, { ok: true, actif: false, depuis: T0, par: 'marie' }); }
-    return repondre(200, faux.etat === 'off' ? { ok: true, actif: false, depuis: T0, par: 'marie' } : { ok: true, actif: true, depuis: null, par: null });
+    const ce = faux.etatOuvert ? { 'Access-Control-Allow-Origin': '*', 'Vary': 'Origin' } : cors, plus = faux.etatOuvert ? { origine: permise } : {};
+    if (faux.etat === 'erreur') return repondre(500, { ok: false }, ce);
+    if (faux.etat === 'lent') { await attendre(6000); return repondre(200, { ok: true, actif: false, depuis: T0, par: 'marie', ...plus }, ce); }
+    return repondre(200, Object.assign(faux.etat === 'off' ? { ok: true, actif: false, depuis: T0, par: 'marie' } : { ok: true, actif: true, depuis: null, par: null }, plus), ce);
   }
   if (req.method === 'GET' && u.pathname === '/demandes') {
     faux.appelsDemandes++;
     if (faux.demandes === 'injoignable') return req.socket.destroy();
+    if (faux.demandes === 'absent') { res.writeHead(404); return res.end('introuvable'); }
     if (origine && !permise) return repondre(403, { ok: false, erreur: 'page non autorisée' });
     if (faux.demandes === 'interdit') return repondre(403, { ok: false, erreur: 'page non autorisée' });
     if (!qui) return repondre(401, { ok: false, cle: true, erreur: 'clé d’équipe absente ou inconnue' });
@@ -144,7 +149,7 @@ async function page(taille, o = {}) {
   const p = await ctx.newPage();
   if (existsSync(H2C)) await p.route('https://cdnjs.cloudflare.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: readFileSync(H2C, 'utf8') }));
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
-  await p.goto(ORIGINE + '/demo/index.html?relais=' + encodeURIComponent(RELAIS));
+  await p.goto((o.origine || ORIGINE) + '/demo/index.html?relais=' + encodeURIComponent(o.relais || RELAIS));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
@@ -281,6 +286,16 @@ try {
   await e.p.evaluate(() => window.Signaler.demandes());
   await e.p.waitForSelector('.sgn-carte');
   ok((await texte(e.p, '#sgn-titre')) === 'Mes demandes', 'Signaler.demandes() ouvre quand même la liste (le pupitre s’en sert)');
+  await e.p.keyboard.press('Escape');
+  let lusEtat = faux.appelsEtat;
+  await e.p.evaluate(() => window.Signaler.montrer());
+  await e.p.waitForTimeout(1500);
+  ok(faux.appelsEtat > lusEtat && !(await e.p.$('.sgn-fab')), 'toujours coupé : Signaler.montrer() (Home, après la connexion) redemande au relais et ne passe pas outre l’interrupteur');
+  faux.etat = 'on';
+  await e.p.evaluate(() => window.Signaler.montrer());
+  ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)), 'rallumé depuis le pupitre : Signaler.montrer() fait revenir le rond sans recharger la page');
+  ok(!!(await e.p.waitForFunction(() => { const b = document.querySelector('.sgn-badge'); return b && b.style.display !== 'none' && b.textContent === '4'; }, null, { timeout: 5000 }).catch(() => null)), 'avec son nombre à traiter (4)');
+  ok(e.erreursPage.length === 0, 'aucune erreur JavaScript');
   await e.ctx.close();
   for (const [mode, dit] of [['on', 'allumé'], ['erreur', 'relais en erreur (500)'], ['absent', 'vieux relais sans /etat (404 sans CORS)']]) {
     faux.etat = mode;
@@ -308,6 +323,10 @@ try {
   ok((await texte(e.p, '.sgn-etat')) === 'Le bouton est coupé depuis le pupitre.', 'coupé pendant que la page était ouverte : « Le bouton est coupé depuis le pupitre. »');
   ok(!(await e.p.$('.sgn-fab')) && !(await e.p.$('.sgn-badge')), 'et le rond disparaît');
   ok(appels.length === n0 && (await e.p.inputValue('.sgn-texte')) === 'Essai pendant la coupure' && await e.p.isDisabled('.sgn-envoyer'), 'rien n’est parti à Claude, le message reste, « Envoyer » est grisé');
+  faux.coupe = false;
+  await e.p.keyboard.press('Escape');
+  await e.p.evaluate(() => window.Signaler.montrer());
+  ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)), 'puis rallumé : Signaler.montrer() le fait revenir');
   ok(e.erreursPage.length === 0, 'aucune erreur JavaScript');
   await e.ctx.close();
 
@@ -470,6 +489,57 @@ try {
       }
       await x.ctx.close();
     }
+  }
+  console.log('8. Page absente des ORIGINES, relais pas à jour, relais éteint : on dit lequel (pas « injoignable » pour tout)');
+  const LOCALE = 'http://localhost:' + site.address().port;   // le même site sous une autre adresse : absente des ORIGINES
+  const eteint = http.createServer(); await new Promise((r) => eteint.listen(0, '127.0.0.1', r));
+  const RELAIS_ETEINT = 'http://127.0.0.1:' + eteint.address().port; await new Promise((r) => eteint.close(r));
+  const erreurListe = async (q) => {
+    await q.p.evaluate(() => window.Signaler.demandes());
+    await q.p.waitForSelector('.sgn-erreur', { timeout: 12000 });
+    return texte(q.p, '.sgn-erreur');
+  };
+  const essaiEnvoi = async (q) => {
+    await q.p.click('.sgn-fab', { position: { x: 24, y: 30 } });
+    await q.p.waitForSelector('.sgn-v img', { timeout: 15000 });
+    const avant = await texte(q.p, '.sgn-etat');
+    await q.p.fill('.sgn-texte', 'Essai depuis une page refusée');
+    await q.p.click('.sgn-envoyer');
+    await q.p.waitForFunction(() => /^Pas envoyé/.test(document.querySelector('.sgn-etat').textContent), null, { timeout: 15000 });
+    return { avant, apres: await texte(q.p, '.sgn-etat'), garde: (await q.p.inputValue('.sgn-texte')) === 'Essai depuis une page refusée' };
+  };
+  const CAS = [
+    { dit: 'relais qui dit « origine: false » (GET /etat lisible de partout)', theme: 'light', o: { origine: LOCALE }, regle: () => { faux.etatOuvert = true; },
+      liste: /^Page non autorisée : ce site n’est pas dans la liste du relais \(ORIGINES\)\.$/, avant: /^Cette page n’est pas autorisée par le relais/, envoi: /^Pas envoyé : page non autorisée/ },
+    { dit: 'relais du contrat (pas de CORS pour une page refusée)', theme: 'dark', o: { origine: LOCALE }, regle: () => {},
+      liste: /pas à cette page : son adresse n’est sans doute pas dans sa liste \(ORIGINES\), ou le relais n’est pas encore à jour/, avant: /^$/, envoi: /^Pas envoyé : le relais refuse cette page/ },
+    { dit: 'vieux relais, d’avant « Mes demandes » (404 sans CORS)', theme: 'light', o: {}, regle: () => { faux.etat = 'absent'; faux.demandes = 'absent'; },
+      liste: /ou le relais n’est pas encore à jour pour « Mes demandes »/ },
+    { dit: 'relais éteint', theme: 'dark', o: { relais: RELAIS_ETEINT }, regle: () => {},
+      liste: /^Le relais est injoignable/, avant: /^$/, envoi: /^Pas envoyé : le relais ne répond pas/ },
+  ];
+  for (const [i, c] of CAS.entries()) {
+    remettre(); c.regle();
+    const q = await page({ width: 360, height: 780 }, Object.assign({ cle: CLE, theme: c.theme }, c.o));
+    ok(!!(await q.p.waitForSelector('.sgn-fab', { timeout: 6000 }).catch(() => null)), c.dit + ' : le rond apparaît (il n’est pas coupé)');
+    await q.p.waitForTimeout(800);
+    ok(!(await q.p.isVisible('.sgn-badge')), c.dit + ' : pas de nombre sur le rond (la liste n’a pas pu être lue)');
+    const msg = await erreurListe(q);
+    ok(c.liste.test(msg), c.dit + ' : « ' + msg + ' »');
+    const pbs = await controler(q.p);
+    ok(!pbs.length, c.dit + ' : mise en page à 360 px' + (pbs.length ? ' : ' + pbs.join(' ; ') : ''));
+    await capture(q.p, 'w-360-' + c.theme + '-erreur-' + (i + 1) + '.png');
+    await q.p.keyboard.press('Escape');
+    if (c.envoi) {
+      const n0 = appels.length, r = await essaiEnvoi(q);
+      ok(c.avant.test(r.avant), c.dit + ' : avant l’envoi, ' + (r.avant ? '« ' + r.avant + ' »' : 'rien de signalé'));
+      ok(c.envoi.test(r.apres) && r.garde && appels.length === n0, c.dit + ' : « ' + r.apres + ' » (message gardé, rien n’est parti)');
+      const pbs2 = await controler(q.p);
+      ok(!pbs2.length, c.dit + ' : mise en page de la fenêtre à 360 px' + (pbs2.length ? ' : ' + pbs2.join(' ; ') : ''));
+      await capture(q.p, 'w-360-' + c.theme + '-erreur-' + (i + 1) + '-envoi.png');
+    }
+    ok(q.erreursPage.length === 0, c.dit + ' : aucune erreur JavaScript');
+    await q.ctx.close();
   }
   console.log('  captures : ' + CAPTURES);
 } catch (e) { ko++; console.log('  ✗ exception : ' + (e && e.stack || e)); }
