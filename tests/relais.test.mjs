@@ -1158,7 +1158,8 @@ test('les routes /auth sans SESSION_SECRET (ou trop court) : 503 « pas encore r
   for (const secret of [undefined, '', 'trop-court']) {
     const env = envAuth({ SESSION_SECRET: secret }), R = routine();
     for (const [m, chemin] of [['POST', '/auth/options/inscription'], ['POST', '/auth/inscription'], ['POST', '/auth/options/connexion'], ['GET', '/auth/options/connexion'],
-      ['POST', '/auth/connexion'], ['GET', '/auth/appareils'], ['POST', '/auth/appareils/' + 'A'.repeat(43) + '/retirer'], ['POST', '/auth/verifier'], ['GET', '/auth/rien']]) {
+      ['POST', '/auth/connexion'], ['GET', '/auth/appareils'], ['POST', '/auth/appareils/' + 'A'.repeat(43) + '/retirer'], ['POST', '/auth/verifier'],
+      ['POST', '/auth/cle/nouvelle'], ['GET', '/auth/rien']]) {
       const rep = await appel(env, R, m, chemin, { origine: ORIGINE_770, corps: m === 'POST' ? {} : undefined });
       assert.equal(rep.status, 503, chemin); assert.equal(await rep.text(), '{"ok":false,"erreur":"connexion par empreinte pas encore réglée"}', chemin);
     }
@@ -1166,9 +1167,10 @@ test('les routes /auth sans SESSION_SECRET (ou trop court) : 503 « pas encore r
     assert.equal((await appel(env, R, 'GET', '/demandes', { cle: null, entetes: bearer(s) })).status, 401, 'sans secret, aucune session ne vaut');
     assert.equal((await appel(env, R, 'POST', '/signaler', { corps: signalement() })).status, 200, 'la clé, comme avant');
   }
-  // Sans stockage : 503 aussi (rien où ranger défis et appareils).
+  // Sans stockage : 503 aussi (rien où ranger défis, appareils et clés).
   const sans = Object.assign(env0(), { PIECES: undefined, SESSION_SECRET: SECRET });
   assert.equal((await appel(sans, null, 'POST', '/auth/options/connexion', { corps: {} })).status, 503);
+  assert.equal((await appel(sans, null, 'POST', '/auth/cle/nouvelle', { corps: {} })).status, 503);
 });
 
 test('POST /auth/verifier (pour l’API du Mac) : valide, expirée, falsifiée, illisible ; sans origine ; CORS pour une page permise', async () => {
@@ -1495,6 +1497,172 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
   const sansPr = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
   await retourDe(env, { id: sansPr.ref, cle: jetonDe(R.appels[R.appels.length - 1].corps.text), etat: 'a_valider', liens: [] });
   assert.equal((await appel(env, R, 'POST', '/demandes/' + sansPr.ref + '/valider', { cle: null, entetes: bearer(c.j.session) })).status, 409);
+});
+
+// ——— Une nouvelle clé d'équipe depuis le pupitre (POST /auth/cle/nouvelle) ———
+
+test('les clés créées depuis le pupitre (pur) : 24 caractères base64url, seule l’empreinte rangée ; la rangée d’abord, celle de CLES remplacée, CLES changé ensuite', async () => {
+  const tirees = new Set(Array.from({ length: 200 }, () => C.nouvelleCle()));
+  assert.equal(tirees.size, 200, 'jamais deux fois la même');
+  for (const k of tirees) { assert.match(k, /^[A-Za-z0-9_-]{24}$/); assert.match(k, C.CLE_RX); }
+  assert.equal(C.cleCle('marie'), 'cle:marie');
+  const CLES = 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL, neuve = C.nouvelleCle(), app = 'A'.repeat(43);
+  const e = await C.nouvelleCleRangee({ cle: neuve, qui: 'marie', liste: CLES, quand: 1000, app: app });
+  assert.deepEqual(e, { h: await C.sha256Hex(neuve), creeLe: 1000, envRevoque: await C.sha256Hex(CLE_MARIE), app: app });
+  assert.ok(!JSON.stringify(e).includes(neuve) && !JSON.stringify(e).includes(CLE_MARIE), 'aucune clé en clair');
+  assert.equal((await C.nouvelleCleRangee({ cle: neuve, qui: 'zoe', liste: CLES, quand: 1, app: app })).envRevoque, null, 'pas de clé dans CLES : rien à remplacer');
+  const deux = 'marie:' + CLE_MARIE + ',marie:' + CLE_PAUL;
+  const e2 = await C.nouvelleCleRangee({ cle: neuve, qui: 'marie', liste: deux, quand: 1, app: app });
+  assert.deepEqual(e2.envRevoque, [await C.sha256Hex(CLE_MARIE), await C.sha256Hex(CLE_PAUL)], 'plusieurs clés de marie dans CLES : toutes');
+
+  const ranges = { marie: e };
+  assert.deepEqual(await C.deciderCle(neuve, CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(' ' + neuve + ' ', CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' }, 'espaces autour : comme verifierCle');
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, ranges), { ok: false, remplacee: true }, 'l’ancienne ne marche plus');
+  assert.deepEqual(await C.deciderCle(CLE_PAUL, CLES, ranges), { ok: true, nom: 'paul', par: 'cles' }, 'les autres : inchangés');
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, {}), { ok: true, nom: 'marie', par: 'cles' }, 'rien de rangé : CLES, comme avant');
+  for (const k of [CLE_MARIE, CLE_PAUL]) assert.equal((await C.deciderCle(k, deux, { marie: e2 })).ok, false, 'toutes ses clés de CLES sont remplacées');
+  // CLES changé au Terminal (une autre clé pour marie) : celle-là compte ; la clé rangée aussi.
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m', CLES2 = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+  assert.deepEqual(await C.deciderCle(AUTRE, CLES2, ranges), { ok: true, nom: 'marie', par: 'cles' });
+  assert.deepEqual(await C.deciderCle(neuve, CLES2, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES2, ranges), { ok: false }, 'plus dans CLES');
+  // Retirée de CLES : sa clé rangée ne vaut plus rien (elle n'est même pas lue).
+  assert.deepEqual(await C.deciderCle(neuve, 'paul:' + CLE_PAUL, ranges), { ok: false });
+  // Un enregistrement illisible ou une pierre tombale : comme absent.
+  for (const x of [null, { retire: true }, { h: 'pas-une-empreinte', envRevoque: e.envRevoque }, 'texte', 42, []])
+    assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, { marie: x }), { ok: true, nom: 'marie', par: 'cles' }, JSON.stringify(x));
+  assert.equal((await C.deciderCle(neuve, CLES, Object.create(ranges))).ok, false, 'seules les entrées propres sont lues');
+  // Trop courte, vide : refusée.
+  for (const k of ['', null, undefined, 'court', neuve.slice(0, 15)]) assert.deepEqual(await C.deciderCle(k, CLES, ranges), { ok: false }, String(k));
+});
+
+test('POST /auth/cle/nouvelle : empreinte de moins de 5 minutes exigée (la clé seule ne suffit pas), page permise ; un refus ne range rien', async () => {
+  const env = envAuth(), A = await appareil(-7);
+  const { j: ins } = await inscrire(env, A);
+  const chemin = '/auth/cle/nouvelle';
+  const nouvelle = (o) => appel(env, null, 'POST', chemin, Object.assign({ origine: ORIGINE_770, cle: null, corps: {} }, o || {}));
+  // La clé d'équipe seule, même la bonne : 403 « empreinte » (une clé volée n'en crée pas une autre).
+  let rep = await nouvelle({ cle: CLE_MARIE });
+  assert.equal(rep.status, 403); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE_770);
+  assert.deepEqual(await rep.json(), { ok: false, empreinte: true, erreur: 'Une nouvelle clé se crée seulement avec ton empreinte.' });
+  // Une session refusée (expirée, falsifiée, d'un appareil inconnu, illisible) : 401, comme partout (la page l'oublie).
+  const expiree = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 13 * 3600 * 1000 }), SECRET);
+  const inconnu = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: 'B'.repeat(43), rp: '770lab.com', quand: Date.now() }), SECRET);
+  for (const s of [expiree, ins.session + 'x', inconnu, 'illisible']) {
+    rep = await nouvelle({ cle: CLE_MARIE, entetes: bearer(s) });
+    assert.equal(rep.status, 401, s.slice(0, 12));
+    assert.deepEqual(await rep.json(), { ok: false, cle: true, session: true, erreur: 'connexion expirée ou appareil retiré : reconnecte-toi avec ton empreinte' });
+  }
+  // Une session valable dont l'empreinte date de plus de 5 minutes : 403 « empreinte » (pas 401 : la page garde sa session).
+  const vieille = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now(), uv: Date.now() - 6 * 60 * 1000 }), SECRET);
+  rep = await nouvelle({ entetes: bearer(vieille) });
+  assert.equal(rep.status, 403);
+  assert.deepEqual(await rep.json(), { ok: false, empreinte: true, erreur: 'Ton empreinte date de plus de 5 minutes : pose de nouveau le doigt.' });
+  // Une autre page, ou sans origine : 403, sans CORS, même avec une empreinte fraîche.
+  for (const origine of ['https://pirate.fr', null]) {
+    rep = await nouvelle({ origine: origine, entetes: bearer(ins.session) });
+    assert.equal(rep.status, 403, String(origine)); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), null);
+    assert.equal((await rep.json()).erreur, 'page non autorisée');
+  }
+  // Un corps qui n'est pas un objet : 400 ; trop lourd : 413.
+  assert.equal((await nouvelle({ entetes: bearer(ins.session), corps: '[1]' })).status, 400);
+  assert.equal((await nouvelle({ entetes: bearer(ins.session), corps: { x: 'y'.repeat(2000) } })).status, 413);
+  assert.equal([...env.PIECES_KV.objets.keys()].some((k) => k.startsWith('cle:')), false, 'aucun refus ne range rien');
+  assert.equal((await appel(env, null, 'GET', '/demandes')).status, 200, 'la clé de CLES marche toujours');
+  // Le préliminaire CORS de la page.
+  const pre = await routeur(new Request(BASE + chemin, { method: 'OPTIONS', headers: { Origin: ORIGINE_770 } }), env);
+  assert.equal(pre.headers.get('Access-Control-Allow-Origin'), ORIGINE_770); assert.match(pre.headers.get('Access-Control-Allow-Headers'), /Authorization/);
+});
+
+test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout ; une 2e remplace la 1re ; CLES changé au Terminal reprend la main ; jamais en clair', async () => {
+  const env = envAuth(), R = routine(), A = await appareil(-7), journal = [], log = console.log;
+  const { j: ins } = await inscrire(env, A);
+  const creer = async () => {
+    const rep = await appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.session) });
+    return { rep: rep, j: await rep.json() };
+  };
+  const statut = async (cle) => (await appel(env, R, 'GET', '/demandes', { cle: cle })).status;
+  const sha = C.sha256Hex;
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
+  let un, deux;
+  console.log = (...x) => journal.push(x.join(' '));
+  try {
+    // Créée (corps vide permis) : rendue une fois, no-store ; seule son empreinte est rangée, sans fin, avec celle de l'ancienne.
+    un = await creer();
+    assert.equal(un.rep.status, 200, JSON.stringify(un.j));
+    assert.equal(un.rep.headers.get('Cache-Control'), 'no-store'); assert.equal(un.rep.headers.get('Access-Control-Allow-Origin'), ORIGINE_770);
+    assert.deepEqual(Object.keys(un.j).sort(), ['cle', 'creeLe', 'ok', 'qui']);
+    assert.equal(un.j.ok, true); assert.equal(un.j.qui, 'marie'); assert.match(un.j.cle, /^[A-Za-z0-9_-]{24}$/);
+    assert.ok(Math.abs(un.j.creeLe - Date.now()) < 5000);
+    const range = env.PIECES_KV.objets.get('cle:marie');
+    assert.deepEqual(JSON.parse(range.v), { h: await sha(un.j.cle), creeLe: un.j.creeLe, envRevoque: await sha(CLE_MARIE), app: A.id });
+    assert.equal(range.o, undefined, 'une clé ne s’efface pas d’elle-même');
+
+    // L'ancienne (celle de CLES) ne marche plus ; la nouvelle marche partout, sous le bon nom ; paul et la session : inchangés.
+    let rep = await appel(env, R, 'GET', '/demandes', { cle: CLE_MARIE });
+    assert.equal(rep.status, 401); assert.deepEqual(await rep.json(), { ok: false, cle: true, erreur: 'clé d’équipe absente ou inconnue' });
+    assert.equal(await statut(un.j.cle), 200);
+    const sig = await (await appel(env, R, 'POST', '/signaler', { cle: un.j.cle, corps: signalement() })).json();
+    assert.equal(sig.ok, true); assert.ok(R.appels[0].corps.text.includes('Signalé par : marie'), 'le nom vient de la clé rangée');
+    assert.equal((await appel(env, R, 'POST', '/signaler', { cle: CLE_MARIE, corps: signalement() })).status, 401);
+    assert.equal(R.appels.length, 1, 'l’ancienne clé ne déclenche plus la routine');
+    const coupe = await (await appel(env, null, 'POST', '/etat', { origine: null, cle: un.j.cle, corps: { actif: false } })).json();
+    assert.deepEqual([coupe.actif, coupe.par], [false, 'marie'], 'POST /etat (sans origine) : la nouvelle clé, sous le nom de marie');
+    await appel(env, null, 'POST', '/etat', { origine: null, cle: un.j.cle, corps: { actif: true } });
+    assert.equal((await appel(env, null, 'GET', '/routine', { origine: null, cle: un.j.cle })).status, 200);
+    assert.equal((await appel(env, null, 'GET', '/routine', { origine: null, cle: CLE_MARIE })).status, 401);
+    assert.equal(await statut(CLE_PAUL), 200, 'paul : sa clé de CLES, comme avant');
+    assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(ins.session) })).status, 200, 'la session de marie vaut toujours');
+    // Brancher un appareil avec la nouvelle clé (l'empreinte d'un autre téléphone) : marie.
+    const B = await appareil(-7);
+    const insB = await inscrire(env, B, { cle: un.j.cle });
+    assert.equal(insB.rep.status, 200, JSON.stringify(insB.j)); assert.equal(insB.j.qui, 'marie');
+    assert.equal((await inscrire(env, await appareil(-7), { cle: CLE_MARIE })).rep.status, 401, 'l’ancienne n’inscrit plus rien');
+
+    // Une 2e création remplace la 1re (refusée à son tour) ; l'ancienne de CLES reste refusée.
+    deux = await creer();
+    assert.equal(deux.rep.status, 200); assert.notEqual(deux.j.cle, un.j.cle);
+    assert.equal(await statut(un.j.cle), 401); assert.equal(await statut(deux.j.cle), 200); assert.equal(await statut(CLE_MARIE), 401);
+    assert.equal(JSON.parse(env.PIECES_KV.objets.get('cle:marie').v).envRevoque, await sha(CLE_MARIE));
+
+    // Le propriétaire change CLES au Terminal (une autre clé pour marie) : celle-là compte de nouveau, sous son nom.
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(AUTRE), 200);
+    assert.deepEqual((await (await appel(env, null, 'GET', '/demandes', { cle: AUTRE })).json()).demandes.map((d) => d.id), [sig.ref]);
+    assert.equal(await statut(CLE_MARIE), 401); assert.equal(await statut(deux.j.cle), 200, 'la clé créée au pupitre vaut tant que marie est dans CLES');
+    // Revenir à l'ancienne valeur de CLES : l'ancienne clé reste remplacée.
+    env.CLES = 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(CLE_MARIE), 401);
+    // Marie retirée de CLES : sa clé rangée ne vaut plus rien, sa session non plus.
+    env.CLES = 'paul:' + CLE_PAUL;
+    assert.equal(await statut(deux.j.cle), 401); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(CLE_PAUL), 200);
+    assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(ins.session) })).status, 401);
+    // Remise dans CLES sous le même nom : sa clé du pupitre revient avec elle (INSTALL.md le dit).
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(deux.j.cle), 200);
+  } finally { console.log = log; }
+
+  // Le journal : une ligne « [cle] » par création, avec le nom seulement ; ni les clés ni leurs empreintes.
+  assert.deepEqual(journal.filter((l) => l.startsWith('[cle]')), ['[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}']);
+  const tout = journal.join('\n');
+  for (const secret of [un.j.cle, deux.j.cle, await sha(un.j.cle), await sha(deux.j.cle), CLE_MARIE, AUTRE, CLE_PAUL]) assert.ok(!tout.includes(secret), secret);
+  // Le stockage : aucune clé en clair, nulle part (ni sous « cle: », ni dans une demande, un appareil…).
+  const texte = (v) => (typeof v === 'string' ? v : Buffer.from(v instanceof ArrayBuffer ? new Uint8Array(v) : v).toString('latin1'));
+  for (const [k, x] of env.PIECES_KV.objets) for (const cle of [un.j.cle, deux.j.cle]) assert.ok(!texte(x.v).includes(cle) && !k.includes(cle), k);
+});
+
+test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CLES seule, comme avant', async () => {
+  const env = Object.assign(env0(), { ORIGINES: ORIGINE_770, SESSION_SECRET: SECRET }), A = await appareil(-7);
+  const { j: ins } = await inscrire(env, A);
+  const j = await (await appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.session), corps: {} })).json();
+  assert.equal(j.ok, true, JSON.stringify(j));
+  assert.equal(env.PIECES.objets.get('cle:marie').o.customMetadata.genre, 'cle', 'étiquetée comme le reste');
+  assert.equal((await appel(env, null, 'GET', '/demandes', { origine: ORIGINE_770, cle: CLE_MARIE })).status, 401);
+  assert.equal((await appel(env, null, 'GET', '/demandes', { origine: ORIGINE_770, cle: j.cle })).status, 200);
+  const sans = Object.assign(env0(), { PIECES: undefined }), R = routine();
+  assert.equal((await appel(sans, R, 'POST', '/signaler', { corps: signalement() })).status, 200, 'sans stockage : CLES, comme avant');
+  assert.equal((await appel(sans, R, 'POST', '/signaler', { cle: j.cle, corps: signalement() })).status, 401);
 });
 
 // ——— Deux abonnements Claude ———

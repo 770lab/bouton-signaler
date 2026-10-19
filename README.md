@@ -54,6 +54,8 @@ l'option sans serveur — un compte Cloudflare gratuit.
   exige une empreinte de moins de 5 minutes, jamais la seule clé. Un projet peut être figé « à valider » (`MODE_FIGE`).
 - La connexion par empreinte ne garde que des clés PUBLIQUES ; les sessions sont signées (HMAC, secret `SESSION_SECRET`),
   revérifiées à chaque usage (appareil retiré ou personne sortie de `CLES` : plus rien ne passe).
+- « Nouvelle clé » (pupitre) : une clé d'équipe neuve, contre une empreinte de moins de 5 minutes, jamais avec la seule clé ;
+  l'ancienne ne marche plus, le relais ne garde que l'empreinte de la nouvelle.
 - Captures et notes sont servies sous des adresses aléatoires de 128 bits, effacées après 30 jours (Workers KV ; avec R2,
   prévoir une règle de suppression). Les demandes s’effacent 180 jours après leur dernière nouvelle (Workers KV).
 - Chaque demande a son propre jeton de retour, que seule la routine reçoit ; le relais n'en garde que l'empreinte. Une page ne

@@ -9,7 +9,8 @@
 //   secrets ROUTINE_URL   https://api.anthropic.com/v1/claude_code/routines/trig_…/fire   (abonnement Claude 1)
 //           ROUTINE_JETON le jeton de CETTE routine (sk-ant-oat01-…)
 //           ROUTINE_URL_2 / ROUTINE_JETON_2 (facultatifs) la routine du second abonnement Claude, prise quand le premier refuse
-//           CLES          les clés d'équipe : « marie:<clé>,paul:<clé> » (16 caractères au moins chacune)
+//           CLES          les clés d'équipe : « marie:<clé>,paul:<clé> » (16 caractères au moins chacune) ; c'est aussi la liste
+//                         de l'équipe : une clé créée depuis le pupitre (/auth/cle/nouvelle) remplace celle de CLES pour ce nom
 //           SESSION_SECRET (facultatif) 32 caractères aléatoires au moins : la connexion par empreinte (sans lui, les routes /auth
 //                         répondent 503 et tout le reste marche comme avant)
 //   stockage (facultatif) : R2 PIECES, ou Workers KV PIECES_KV (inclus dans l'offre gratuite, sans abonnement R2 ; fichiers
@@ -22,7 +23,7 @@
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, ses captures, de quoi annuler, avec son jeton)
 //          GET /etat[?projet=<id>] · POST /etat (interrupteurs et mode de chaque projet) · GET / POST /routine (les abonnements)
 //          /auth/… (la connexion par empreinte : options/inscription, inscription, options/connexion, connexion, appareils,
-//          appareils/<id>/retirer, verifier) · OPTIONS (CORS)
+//          appareils/<id>/retirer, verifier ; cle/nouvelle = une nouvelle clé d'équipe, empreinte de moins de 5 min) · OPTIONS (CORS)
 // « Ma clé ou ma session » : chaque route qui accepte la clé d'équipe (X-Signaler-Cle) accepte aussi Authorization: Bearer <session>.
 import * as C from '../coeur.mjs';
 
@@ -34,6 +35,7 @@ const SANS_STOCKAGE = 'le relais n’a pas de stockage';
 const COUPE = { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' };
 const PAS_REGLE = { ok: false, erreur: 'connexion par empreinte pas encore réglée' };
 const NON_AUTORISEE = { ok: false, erreur: 'page non autorisée' };
+const SESSION_REFUSEE = { ok: false, cle: true, session: true, erreur: 'connexion expirée ou appareil retiré : reconnecte-toi avec ton empreinte' };
 
 // Le stockage, ramené à une seule forme : put/get pour les pièces (forme R2 : { body, httpMetadata }), lireTexte/ecrireTexte pour
 // les demandes, les appareils et les réglages (du JSON), effacer (null si le stockage ne sait pas). Workers KV : chaque pièce
@@ -126,8 +128,23 @@ async function sessionValide(env, jeton) {
   return { ok: true, p: s.p, appareil: ap };
 }
 
+// Une clé d'équipe (X-Signaler-Cle) : celle créée depuis le pupitre (rangée sous « cle:<nom> », son empreinte seulement) ou celle
+// de CLES, sauf si une clé créée depuis le pupitre l'a remplacée (C.deciderCle). « cle:<nom> » est lu une fois par requête, pour
+// chaque nom de CLES seulement. Workers KV peut mettre jusqu'à 60 s à propager une nouvelle clé d'un lieu à l'autre : pendant ce
+// temps, ailleurs, l'ancienne marche encore et la nouvelle pas encore (rien à faire, la page le dit). Sans stockage : CLES seul,
+// comme avant. Stockage en panne : l'erreur remonte (500), plutôt que d'accepter une clé peut-être remplacée.
+async function cleEquipe(env, cle) {
+  const st = stockage(env);
+  if (!st) return C.verifierCle(cle, env.CLES);
+  if (String(cle || '').trim().length < 16) return { ok: false };
+  const noms = C.nomsDesCles(env.CLES);
+  const lus = await Promise.all(noms.map(async (nom) => lireJson(await st.lireTexte(C.cleCle(nom)))));
+  return C.deciderCle(cle, env.CLES, Object.fromEntries(noms.map((nom, i) => [nom, lus[i]])));
+}
+
 // Les vérifications communes aux routes des pages : l'origine (exigée, ou seulement vérifiée quand il y en a une), puis la session
-// (Authorization: Bearer) ou la clé d'équipe (X-Signaler-Cle), qui donnent le nom. Rend { qui, session } ou { refus: Response }.
+// (Authorization: Bearer) ou la clé d'équipe (X-Signaler-Cle, voir cleEquipe), qui donnent le nom. Rend { qui, session } ou
+// { refus: Response }.
 // Une session refusée (expirée, appareil retiré) : 401 avec « session: true » (la page l'oublie et propose l'empreinte).
 async function acces(req, env, cors, origineFacultative) {
   const o = req.headers.get('Origin');
@@ -139,9 +156,9 @@ async function acces(req, env, cors, origineFacultative) {
     if (s.ok) return { qui: s.p.qui, session: s.p };
     refusee = true;
   }
-  const qui = C.verifierCle(req.headers.get('X-Signaler-Cle'), env.CLES);
+  const qui = await cleEquipe(env, req.headers.get('X-Signaler-Cle'));
   if (qui.ok) return { qui: qui.nom, session: null };
-  if (refusee) return { refus: json({ ok: false, cle: true, session: true, erreur: 'connexion expirée ou appareil retiré : reconnecte-toi avec ton empreinte' }, 401, cors) };
+  if (refusee) return { refus: json(SESSION_REFUSEE, 401, cors) };
   return { refus: json({ ok: false, cle: true, erreur: 'clé d’équipe absente ou inconnue' }, 401, cors) };
 }
 
@@ -560,6 +577,27 @@ async function verifierRoute(req, env, cors) {
   return json({ ok: true, valide: true, qui: s.p.qui, exp: s.p.exp, uv: s.p.uv }, 200, cors);
 }
 
+// POST /auth/cle/nouvelle {} : une nouvelle clé d'équipe pour la personne de la SESSION (« Nouvelle clé » du pupitre). Exige une
+// session à empreinte de moins de 5 minutes, comme « valider » : la clé d'équipe seule ne suffit pas (une clé volée ne doit pas
+// pouvoir en créer une autre et enfermer le propriétaire dehors). La clé est tirée ici et rendue UNE fois (no-store) ; seule son
+// empreinte est rangée sous « cle:<nom> » (sans fin), avec celle de la clé de CLES qu'elle remplace (C.nouvelleCleRangee) ; elle
+// remplace aussi celle créée avant. Ni la clé ni son empreinte ne vont au journal ; une panne n'y laisse que la route.
+async function nouvelleCleRoute(req, env, st, cors) {
+  if (!C.origineAutorisee(req.headers.get('Origin'), env.ORIGINES)) return json(NON_AUTORISEE, 403, cors);
+  const b = await petitCorps(req, C.LIMITES.etatOctets, true);
+  if (!b.corps) return json({ ok: false, erreur: b.trop ? 'demande trop lourde' : 'demande illisible' }, b.trop ? 413 : 400, cors);
+  const m = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.get('Authorization') || '');
+  if (!m) return json({ ok: false, empreinte: true, erreur: 'Une nouvelle clé se crée seulement avec ton empreinte.' }, 403, cors);
+  const s = await sessionValide(env, m[1]);
+  if (!s.ok) return json(SESSION_REFUSEE, 401, cors);
+  const quand = Date.now();
+  if (!C.sessionFraiche(s.p, quand)) return json({ ok: false, empreinte: true, erreur: 'Ton empreinte date de plus de 5 minutes : pose de nouveau le doigt.' }, 403, cors);
+  const cle = C.nouvelleCle();
+  await st.ecrireTexte(C.cleCle(s.p.qui), JSON.stringify(await C.nouvelleCleRangee({ cle: cle, qui: s.p.qui, liste: env.CLES, quand: quand, app: s.p.app })));
+  console.log('[cle]', JSON.stringify({ qui: s.p.qui }));
+  return json({ ok: true, cle: cle, qui: s.p.qui, creeLe: quand }, 200, cors);
+}
+
 // Toutes les routes /auth : sans SESSION_SECRET (32 caractères au moins), 503 « pas encore réglée » ; sans stockage, 503 aussi.
 async function auth(req, env, p, m) {
   const cors = entetesCors(req, env);
@@ -572,6 +610,7 @@ async function auth(req, env, p, m) {
   if (m === 'POST' && p === '/auth/options/inscription') return optionsInscriptionRoute(req, env, st, cors);
   if (m === 'POST' && p === '/auth/inscription') return inscription(req, env, st, cors);
   if (m === 'GET' && p === '/auth/appareils') return listeAppareils(req, env, st, cors);
+  if (m === 'POST' && p === '/auth/cle/nouvelle') return nouvelleCleRoute(req, env, st, cors);
   const x = RETIRER_RX.exec(p);
   if (m === 'POST' && x) return retirer(req, env, st, cors, x[1]);
   return new Response('introuvable', { status: 404 });

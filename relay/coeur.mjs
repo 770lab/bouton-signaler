@@ -11,7 +11,8 @@
 //
 // Ce fichier porte aussi : la connexion par EMPREINTE (WebAuthn : CBOR, clés COSE, signatures, jeton de session signé HMAC),
 // le MODE de chaque projet (direct / à valider), les DEUX abonnements Claude (et le passage de l'un à l'autre), le journal de la
-// page et les éléments entourés recopiés dans le texte de la routine, et les travaux ANNULER / VALIDER écrits par le relais.
+// page et les éléments entourés recopiés dans le texte de la routine, les travaux ANNULER / VALIDER écrits par le relais, et les
+// clés d'équipe créées depuis le pupitre (« Nouvelle clé », avec l'empreinte).
 
 export const LIMITES = {
   texte: 4000,              // le texte écrit ou dicté
@@ -1142,4 +1143,59 @@ export function nomsDesCles(liste) {
     if (k.length >= 16 && !noms.includes(nom)) noms.push(nom);
   });
   return noms;
+}
+
+// ——— LES CLÉS D'ÉQUIPE CRÉÉES DEPUIS LE PUPITRE (POST /auth/cle/nouvelle) ———
+// Le propriétaire touche « Nouvelle clé » et pose le doigt : le relais tire une clé neuve et ne range que son EMPREINTE (sha256)
+// sous « cle:<nom> » : { h, creeLe, envRevoque, app }. `envRevoque` = l'empreinte de la clé que CLES lui donnait à cet instant
+// (de chacune, s'il en a plusieurs ; null s'il n'en a pas) : celle-là ne marche plus. Une 2e création remplace la 1re. Si le
+// propriétaire change ensuite CLES au Terminal (une autre clé pour ce nom), la clé de CLES compte de nouveau : le Terminal reste
+// toujours le secours. Seule une personne présente dans CLES peut avoir une clé rangée : retirer quelqu'un de CLES retire tout.
+// Workers KV met jusqu'à 60 s à propager une écriture d'un lieu à l'autre : la nouvelle clé (et le refus de l'ancienne) vaut
+// partout dans la minute, rien à faire de plus.
+export const cleCle = (qui) => 'cle:' + qui;
+export const CLE_RX = /^[A-Za-z0-9_-]{24}$/;
+const EMPREINTE_RX = /^[0-9a-f]{64}$/;
+// 18 octets aléatoires → 24 caractères base64url (144 bits).
+export const nouvelleCle = () => b64u(aleatoire(18));
+// Les clés que CLES donne à ce nom (la même lecture que verifierCle : 16 caractères au moins).
+function clesDuNom(liste, nom) {
+  const cles = [];
+  String(liste || '').split(',').map((x) => x.trim()).filter(Boolean).forEach((ligne) => {
+    const i = ligne.indexOf(':');
+    const n = propre(i > 0 ? ligne.slice(0, i).trim() : 'équipe', 60), k = i > 0 ? ligne.slice(i + 1).trim() : ligne;
+    if (k.length >= 16 && n === nom) cles.push(k);
+  });
+  return cles;
+}
+// L'enregistrement rangé sous « cle:<qui> » (JAMAIS la clé elle-même). o : { cle, qui, liste (CLES), quand, app }.
+export async function nouvelleCleRangee(o) {
+  const hs = await Promise.all(clesDuNom(o.liste, o.qui).map(sha256Hex));
+  return { h: await sha256Hex(o.cle), creeLe: o.quand, envRevoque: hs.length === 0 ? null : hs.length === 1 ? hs[0] : hs, app: o.app || null };
+}
+// L'enregistrement lu pour ce nom : { h, revoques: [empreintes] } ou null (absent, pierre tombale, illisible).
+function cleRangeeLue(ranges, nom) {
+  const x = ranges && typeof ranges === 'object' && Object.prototype.hasOwnProperty.call(ranges, nom) ? ranges[nom] : null;
+  if (!x || typeof x !== 'object' || x.retire || typeof x.h !== 'string' || !EMPREINTE_RX.test(x.h)) return null;
+  return { h: x.h, revoques: [].concat(x.envRevoque == null ? [] : x.envRevoque).filter((e) => typeof e === 'string' && EMPREINTE_RX.test(e)) };
+}
+// La clé présentée (X-Signaler-Cle) est-elle acceptée, et pour qui ? `ranges` = { <nom>: ce qui est lu sous « cle:<nom> » } pour
+// les noms de nomsDesCles(liste). D'abord une clé rangée (comparée en temps constant, tous les noms passés en revue) ; sinon la clé
+// de CLES, sauf si une clé rangée pour ce nom l'a remplacée (son empreinte est dans `envRevoque`). Rend { ok, nom, par:
+// 'rangee'|'cles' } ou { ok: false } ({ ok: false, remplacee: true } pour une clé de CLES remplacée depuis le pupitre).
+export async function deciderCle(cle, liste, ranges) {
+  cle = String(cle || '').trim();
+  if (cle.length < 16) return { ok: false };
+  const h = await sha256Hex(cle);
+  let trouve = null;
+  for (const nom of nomsDesCles(liste)) {
+    const e = cleRangeeLue(ranges, nom);
+    if (e && egaux(h, e.h) && !trouve) trouve = nom;
+  }
+  if (trouve) return { ok: true, nom: trouve, par: 'rangee' };
+  const v = verifierCle(cle, liste);
+  if (!v.ok) return { ok: false };
+  const e = cleRangeeLue(ranges, v.nom);
+  if (e && e.revoques.some((x) => egaux(h, x))) return { ok: false, remplacee: true };
+  return { ok: true, nom: v.nom, par: 'cles' };
 }

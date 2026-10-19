@@ -89,7 +89,7 @@ Expose les mêmes routes dans le serveur du projet :
   `worker.mjs`), qui fait l'aiguillage. Le stockage sert aussi à du JSON : `put(clé, texte, …)` doit accepter une chaîne, et
   `get(clé)` rendre `{ body, httpMetadata }` (ou un objet avec `text()`), `null` si la clé n'existe pas ; `delete(clé)` (sans lui,
   le relais écrit une « pierre tombale » lue comme absente). Clés utilisées : les pièces (32 hex), `demande:<réf>`,
-  `demandes:<nom>`, `etat`, `routine`, `defi:<défi>`, `appareil:<id>`, `appareils:<nom>`, `personne:<nom>`.
+  `demandes:<nom>`, `etat`, `routine`, `defi:<défi>`, `appareil:<id>`, `appareils:<nom>`, `personne:<nom>`, `cle:<nom>`.
 - `OPTIONS` → les en-têtes CORS pour l'origine autorisée (voir `entetesCors` dans `worker.mjs`).
 
 Garde toutes les vérifications telles quelles (clé, origine, limites, un seul appel à la routine, jeton seulement vers
@@ -109,6 +109,15 @@ demandée une seule fois dans la fenêtre du bouton. Pour retirer quelqu'un : en
 pour l'empreinte ne valent plus rien non plus). Une personne qui ne se connecte plus que par l'empreinte GARDE sa clé dans
 `CLES` : c'est la liste de l'équipe.
 Ne recopie pas les clés dans le dépôt ni dans ta réponse finale : donne-les au propriétaire une fois, dans la conversation.
+
+**Une nouvelle clé sans Terminal** (relais avec stockage et `SESSION_SECRET`) : dans le pupitre, carte « Mes appareils »,
+« Nouvelle clé » puis l'empreinte. Le relais (`POST /auth/cle/nouvelle`) exige une empreinte de moins de 5 minutes (une clé
+d'équipe seule ne suffit pas : une clé volée ne peut pas en créer une autre), tire une clé de 24 caractères, la rend UNE fois et
+n'en range que l'empreinte sous `cle:<nom>`. Dès lors, la clé que `CLES` donnait à cette personne ne marche plus ; une nouvelle
+création remplace la précédente. Workers KV met jusqu'à une minute à le savoir partout. Le Terminal reste le secours : changer
+`CLES` (une autre clé pour ce nom) rend la clé de `CLES` valable de nouveau, à côté de celle du pupitre. Retirer la personne de
+`CLES` retire tout, sa clé du pupitre comprise (la remettre sous le même nom la rend valable de nouveau). Pour annuler seulement
+la clé du pupitre : en créer une autre, ou effacer `cle:<nom>` (`npx wrangler@4 kv key delete --binding PIECES_KV --remote "cle:<nom>"`).
 
 ## 4. La routine Claude (sur le compte du propriétaire — c'est lui qui clique)
 
