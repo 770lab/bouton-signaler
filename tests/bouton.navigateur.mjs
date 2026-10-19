@@ -1534,6 +1534,15 @@ try {
       try { await fetch(u); return false; } catch (e) { return true; }
     });
     ok(libere, 'oublier() libère les captures gardées en mémoire (l’adresse blob: ne répond plus)');
+    // Verrouillage puis déverrouillage (config.js d'Avinou Malkenou : oublier() + cacher(), puis oublier() + montrer()) : le rond
+    // existe déjà, la liste oubliée est relue et le nombre des demandes à traiter revient sans ouvrir la feuille.
+    const nb = () => G.p.evaluate(() => { const n = document.querySelector('.sgn-badge'); return n && n.style.display !== 'none' ? n.textContent : ''; });
+    await G.p.evaluate(() => { window.Signaler.cacher(); window.Signaler.oublier(); });
+    const cache = await nb();
+    await G.p.evaluate(() => { window.Signaler.oublier(); window.Signaler.montrer(); });
+    const revient = await G.p.waitForFunction(() => { const n = document.querySelector('.sgn-badge'); return !!n && n.style.display !== 'none' && Number(n.textContent) > 0; }, null, { timeout: 8000 }).then(() => true, () => false);
+    ok(cache === '' && revient && !(await G.p.$('.sgn-fond')), 'verrouillage puis déverrouillage (oublier, montrer) : le nombre des demandes à traiter revient, la feuille reste fermée'
+      + (cache === '' ? '' : ' (nombre encore montré après oublier : ' + cache + ')') + (revient ? '' : ' (nombre absent après montrer)'));
     const pbM = await controler(G.p);
     ok(!pbM.length && !G.erreursPage.length, '412 px, images relues : mise en page' + (pbM.length ? ' — ' + pbM.join(' ; ') : '') + (G.erreursPage.length ? ' — ' + G.erreursPage.join(' ; ') : ''));
     await G.ctx.close();

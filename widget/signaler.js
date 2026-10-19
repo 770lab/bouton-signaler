@@ -1603,22 +1603,28 @@
   // Capture avant / après refusée par la CSP de la page (img-src sans le relais, comme Avinou Malkenou qui ne l'admet qu'en
   // connect-src) : relue par fetch (le relais répond avec CORS aux ORIGINES) et montrée depuis la mémoire (blob:). Une seule
   // tentative par image, seulement pour une adresse /piece/ du relais et une réponse image ; sinon siKo(). Oubliées par oublier().
-  var IMAGES_MEMOIRE = {};
+  // Par chercher() (le fetch d'origine : une pièce expirée n'entre ni dans la boîte noire ni dans le point rouge), sans cache
+  // HTTP (no-store : une capture d'Avinou Malkenou ne reste pas sur le disque après le verrouillage). Une lecture partie avant
+  // oublier() (génération changée) n'apporte rien : son blob n'est jamais créé.
+  var IMAGES_MEMOIRE = {}, generationImages = 0;
   function imageEnMemoire(i, siKo) {
     var src = i.getAttribute('data-sgn-src') || i.getAttribute('src') || '';
-    if (i.getAttribute('data-sgn-src') || !window.fetch || !window.URL || !URL.createObjectURL || imageSure(src) !== src || src.indexOf(base() + '/piece/') !== 0) { siKo(); return; }
+    if (i.getAttribute('data-sgn-src') || !fetchNatif || !window.URL || !URL.createObjectURL || imageSure(src) !== src || src.indexOf(base() + '/piece/') !== 0) { siKo(); return; }
     i.setAttribute('data-sgn-src', src);
     if (IMAGES_MEMOIRE[src]) { i.src = IMAGES_MEMOIRE[src]; return; }
-    fetch(src, { credentials: 'omit', cache: 'force-cache' }).then(function (r) {
+    var g = generationImages;
+    chercher(src, { credentials: 'omit', cache: 'no-store' }).then(function (r) {
       if (!r.ok) throw new Error('statut');
       return r.blob();
     }).then(function (b) {
+      if (g !== generationImages) return;
       if (!/^image\/(jpeg|png|webp)$/.test(b.type || '')) throw new Error('genre');
       if (!IMAGES_MEMOIRE[src]) IMAGES_MEMOIRE[src] = URL.createObjectURL(b);
       if (i.isConnected !== false) i.src = IMAGES_MEMOIRE[src];
-    }).catch(function () { siKo(); });
+    }).catch(function () { if (g === generationImages) siKo(); });
   }
   function oublierImages() {
+    generationImages++;
     Object.keys(IMAGES_MEMOIRE).forEach(function (k) { try { URL.revokeObjectURL(IMAGES_MEMOIRE[k]); } catch (e) {} });
     IMAGES_MEMOIRE = {};
   }
@@ -2062,6 +2068,12 @@
     majCompteur();
     chargerDemandes();
   }
+  // Montré de nouveau (montrer()) : le rond existe peut-être déjà ; une liste oubliée entre-temps (oublier(), au verrouillage
+  // d'Avinou Malkenou) est relue, sinon le nombre des demandes à traiter ne reviendrait qu'à l'ouverture de la feuille.
+  function afficher() {
+    monter(); if (fab) fab.style.display = ''; placer(); majCompteur();
+    if (fab && !D.liste && !D.enCours) chargerDemandes();
+  }
   // Page qui cache le bouton au démarrage (écran verrouillé, visiteur…) : rien n'est demandé au relais avant montrer().
   function demarrer() {
     var visible = true;
@@ -2083,11 +2095,11 @@
           if (!actif) { coupe = true; return; }
           coupe = false;
           if (cacheParPage) return;
-          monter(); if (fab) fab.style.display = ''; placer(); majCompteur();
+          afficher();
         });
         return;
       }
-      monter(); if (fab) fab.style.display = ''; placer(); majCompteur();
+      afficher();
     },
     // filtre : 'toutes' | 'traiter' | 'cours', ou { projet: '<id>', etat: 'traiter' } (etat facultatif) pour un seul projet.
     demandes: function (filtre) {
