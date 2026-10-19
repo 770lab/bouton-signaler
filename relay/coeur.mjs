@@ -629,6 +629,7 @@ export const PROJETS = Object.freeze([
   { id: 'pupitre', nom: 'Pupitre' },
   { id: 'havroutia', nom: 'HavroutIA' },
   { id: 'avinou', nom: 'Avinou Malkenou' },
+  { id: 'gescom', nom: 'GesCom' },
   { id: 'koulam', nom: 'KOULAM' },
 ].map((p) => Object.freeze(p)));
 export const estProjet = (id) => typeof id === 'string' && PROJETS.some((p) => p.id === id);
@@ -645,6 +646,7 @@ export function projetDeLaPage(url) {
     if (chemin.startsWith('/home/robots')) return 'pupitre';
     if (chemin.startsWith('/home')) return 'home';
     if (chemin.startsWith('/havroutia')) return 'havroutia';
+    if (chemin.startsWith('/gescom')) return 'gescom';
     return null;
   }
   if (hote === 'avinou-malkenou.web.app') return 'avinou';

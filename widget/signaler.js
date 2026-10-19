@@ -12,7 +12,7 @@
  *    position       'bas-droite' (défaut) ou 'bas-gauche'
  *    html2canvas    l'adresse de html2canvas si la page interdit cdnjs (CSP)
  *    visible        fonction : false pour cacher le bouton (ex. visiteurs non connectés)
- *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'koulam') ; sans réglage, d'après son adresse
+ *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam') ; sans réglage, d'après son adresse
  *                   (Signaler.projetDeLaPage) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
  *                   770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam, sinon aucun
  *
@@ -299,7 +299,7 @@
   // ── LES PROJETS : les mêmes que le relais (PROJETS de relay/coeur.mjs), dans l'ordre du pupitre ────────────────────────────
   // KOULAM n'envoie rien par ce relais (sa propre bulle, sa propre routine) : il est là pour l'interrupteur et les anciennes demandes.
   var PROJETS = [{ id: 'home', nom: 'Home' }, { id: 'pupitre', nom: 'Pupitre' }, { id: 'havroutia', nom: 'HavroutIA' },
-    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'koulam', nom: 'KOULAM' }];
+    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'gescom', nom: 'GesCom' }, { id: 'koulam', nom: 'KOULAM' }];
   // Le projet d'une page d'après son adresse, la même règle que le relais (projetDeLaPage de relay/coeur.mjs) ; null : aucun.
   function projetDeLaPage(url) {
     var u; try { u = new URL(String(url || '')); } catch (e) { return null; }
@@ -309,6 +309,7 @@
       if (chemin.indexOf('/home/robots') === 0) return 'pupitre';
       if (chemin.indexOf('/home') === 0) return 'home';
       if (chemin.indexOf('/havroutia') === 0) return 'havroutia';
+      if (chemin.indexOf('/gescom') === 0) return 'gescom';
       return null;
     }
     if (hote === 'avinou-malkenou.web.app') return 'avinou';

@@ -187,9 +187,9 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   Une page dont l'adresse n'est pas dans `ORIGINES` peut lire `GET /etat` (et seulement cette route) : la réponse porte alors
   `"origine": false` (sans « depuis » ni « par »), pour que le bouton dise « page non autorisée » au lieu de « relais injoignable ».
 - **Un interrupteur par projet**, en plus du général : la liste fixe `PROJETS` de `relay/coeur.mjs` (`home`, `pupitre`,
-  `havroutia`, `avinou`, `koulam`). Le projet d'une page vient de son adresse (`projetDeLaPage`, la même règle dans le bouton ;
-  une adresse d'aucun projet ne suit que le général). Le bouton d'un projet se montre seulement si le général ET le sien sont
-  activés ; un projet jamais touché est activé.
+  `havroutia`, `avinou`, `gescom` (770lab.com/gescom…), `koulam`). Le projet d'une page vient de son adresse (`projetDeLaPage`,
+  la même règle dans le bouton ; une adresse d'aucun projet ne suit que le général). Le bouton d'un projet se montre seulement
+  si le général ET le sien sont activés ; un projet jamais touché est activé.
   - `GET /etat` rend aussi `projets: { <id>: { actif, depuis, par } }` (tous les projets) ; `actif` reste le GÉNÉRAL.
     `GET /etat?projet=<id>` ajoute `projet` et `effectif` (général ET ce projet : ce que le bouton doit faire). Id inconnu : `400`.
   - `POST /etat` avec `{"actif":false,"projet":"<id>"}` coupe ce projet seulement (même clé, mêmes règles ; id inconnu : `400`) ;
@@ -203,7 +203,8 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
 - **Le mode de chaque projet** (dans le même état que les interrupteurs) : `direct` (la routine fusionne, attend que ce soit en
   ligne, renvoie `en_ligne` avec les captures avant / après et `annulation`) ou `valider` (elle ouvre la PR, renvoie `a_valider`
   avec les captures). Par défaut : `direct` pour `home`, `pupitre`, `havroutia` ; `valider` pour `avinou`, qui ne peut JAMAIS
-  passer en direct (`MODE_FIGE` : `400`) ; `koulam` est fixe (sa bulle a sa propre routine) ; une page d'aucun projet : `valider`.
+  passer en direct (`MODE_FIGE` : `400`) ; `koulam` est fixe (sa bulle a sa propre routine) ; `gescom`, comme une page d'aucun
+  projet : `valider` (le pupitre peut le passer en direct).
   `GET /etat` rend `modes` et le `mode` de chaque projet ; `POST /etat` avec `{"projet":"home","mode":"valider"}` le change (même
   clé ou session ; `actif` peut s'y ajouter).
 - **Annuler** : `POST /demandes/<réf>/annuler` (la sienne, `en_ligne` avec `annulation`, jamais `avinou` : `409`) → l'état

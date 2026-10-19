@@ -38,8 +38,9 @@ const signalement = (extra) => Object.assign({ type: 'bug', texte: 'Le bouton En
 const pieces = (objets) => [...objets.entries()].filter(([k]) => /^[0-9a-f]{32}$/.test(k));
 // Les interrupteurs par défaut : le général et chaque projet, activés, sans « depuis » ni « par ».
 const ACTIF = { actif: true, depuis: null, par: null };
-// Le mode par défaut de chaque projet (direct, sauf Avinou Malkenou : à valider, pour toujours).
-const MODES_DEFAUT = { home: 'direct', pupitre: 'direct', havroutia: 'direct', avinou: 'valider', koulam: 'direct' };
+// Le mode par défaut de chaque projet (direct, sauf Avinou Malkenou : à valider, pour toujours ; GesCom, absent de la liste des
+// modes par défaut du relais : à valider, comme une page d'aucun projet, tant que le pupitre ne l'a pas réglé).
+const MODES_DEFAUT = { home: 'direct', pupitre: 'direct', havroutia: 'direct', avinou: 'valider', gescom: 'valider', koulam: 'direct' };
 const avecMode = (id, x) => Object.assign({}, x, { mode: MODES_DEFAUT[id] });
 const tousActifs = () => Object.fromEntries(C.PROJETS.map((p) => [p.id, avecMode(p.id, ACTIF)]));
 const etatDefaut = (extra) => Object.assign({ ok: true }, ACTIF, { projets: tousActifs(), modes: Object.assign({}, MODES_DEFAUT) }, extra || {});
@@ -560,25 +561,26 @@ test('le journal du relais ne porte ni texte, ni clé, ni jeton', async () => {
 
 // Une page de chaque projet, telle que le bouton l'envoie dans contexte.url.
 const PAGES = { home: 'https://770lab.com/home/', pupitre: 'https://770lab.com/home/robots.html', havroutia: 'https://770lab.com/havroutia/',
-  avinou: 'https://avinou-malkenou.web.app/', koulam: 'https://koulam.app/' };
+  avinou: 'https://avinou-malkenou.web.app/', gescom: 'https://770lab.com/gescom/', koulam: 'https://koulam.app/' };
 const depuisLaPage = (url) => signalement({ contexte: { url: url, titre: 'Une page' } });
 const etatDe = async (env, projet, o) => (await appel(env, null, 'GET', '/etat' + (projet ? '?projet=' + encodeURIComponent(projet) : ''), Object.assign({ cle: null }, o || {}))).json();
 
 test('les projets : la liste fixe, et le projet d’une page d’après son adresse', () => {
   assert.deepEqual(C.PROJETS.map((p) => [p.id, p.nom]),
-    [['home', 'Home'], ['pupitre', 'Pupitre'], ['havroutia', 'HavroutIA'], ['avinou', 'Avinou Malkenou'], ['koulam', 'KOULAM']]);
+    [['home', 'Home'], ['pupitre', 'Pupitre'], ['havroutia', 'HavroutIA'], ['avinou', 'Avinou Malkenou'], ['gescom', 'GesCom'], ['koulam', 'KOULAM']]);
   assert.throws(() => { C.PROJETS.push({ id: 'x', nom: 'X' }); }, 'la liste ne se change pas en cours de route');
-  for (const id of ['home', 'pupitre', 'havroutia', 'avinou', 'koulam']) assert.equal(C.estProjet(id), true, id);
+  for (const id of ['home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam']) assert.equal(C.estProjet(id), true, id);
   for (const x of ['Home', 'KOULAM', '', 'tous', '__proto__', 'constructor', 'toString', null, undefined, 1, {}]) assert.equal(C.estProjet(x), false, String(x));
 
   const attendu = {
     'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots.html?demo=1#claude': 'pupitre', 'https://770lab.com/home/robots': 'pupitre',
     'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home', 'https://770lab.com/home/index.html?x=1': 'home', 'https://www.770lab.com/Home/': 'home',
     'https://770lab.com/havroutia/': 'havroutia', 'https://770lab.com/havroutia/index.html#etude': 'havroutia',
+    'https://770lab.com/gescom/': 'gescom', 'https://770lab.com/gescom/clients/42?x=1': 'gescom', 'https://www.770lab.com/GesCom/': 'gescom',
     'https://avinou-malkenou.web.app/': 'avinou', 'https://avinou-malkenou.web.app/carte/12': 'avinou',
     'https://koulam.app/': 'koulam', 'https://koulam.app/tefila/brachot/birkat_halevana': 'koulam', 'https://www.koulam.app/': 'koulam',
     'https://770lab.com/': null, 'https://770lab.com/studio/': null, 'https://770lab.com/robots/home': null,
-    'https://pirate.fr/home/robots.html': null, 'https://770lab.com.pirate.fr/home/': null, 'https://koulam.app.pirate.fr/': null,
+    'https://pirate.fr/home/robots.html': null, 'https://pirate.fr/gescom/': null, 'https://770lab.com/outils/gescom/': null, 'https://770lab.com.pirate.fr/home/': null, 'https://koulam.app.pirate.fr/': null,
     'https://pirate.fr/?u=https://koulam.app': null, 'https://chabapp-5fc3b.firebaseapp.com/studio': null, 'https://app.exemple.fr/clients/42': null,
     'javascript:alert(1)': null, 'pas une adresse': null, '': null,
   };

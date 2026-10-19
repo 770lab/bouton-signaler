@@ -82,12 +82,12 @@ const fausseRoutine = async (url, init) => { appels.push(JSON.parse(init.body));
 //   POST /signaler d'une page d'un projet coupé : « coupé » (le projet d'après contexte.url, comme le relais).
 // faux.etatVieux : relais d'avant les projets (il ne lit pas ?projet=, ne dit ni « projets » ni « effectif »)
 // faux.requetesEtat : le projet demandé à chaque GET /etat (null : sans ?projet=)
-const PROJETS = ['home', 'pupitre', 'havroutia', 'avinou', 'koulam'];
+const PROJETS = ['home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam'];
 // La règle du contrat (une copie ici : le test ne lit pas le code du bouton pour vérifier le bouton).
 function projetDeLaPage(url) {
   let u; try { u = new URL(String(url || '')); } catch (e) { return null; }
   const hote = u.hostname.toLowerCase().replace(/^www\./, ''), c = u.pathname.toLowerCase();
-  if (hote === '770lab.com') return c.startsWith('/home/robots') ? 'pupitre' : c.startsWith('/home') ? 'home' : c.startsWith('/havroutia') ? 'havroutia' : null;
+  if (hote === '770lab.com') return c.startsWith('/home/robots') ? 'pupitre' : c.startsWith('/home') ? 'home' : c.startsWith('/havroutia') ? 'havroutia' : c.startsWith('/gescom') ? 'gescom' : null;
   return hote === 'avinou-malkenou.web.app' ? 'avinou' : hote === 'koulam.app' ? 'koulam' : null;
 }
 const T0 = Date.now();
@@ -731,15 +731,15 @@ try {
     const S = window.Signaler, r = {};
     for (const u of ['https://770lab.com/home/robots.html', 'https://770lab.com/home/robots', 'https://770lab.com/home/', 'https://770lab.com/home',
       'https://www.770lab.com/HOME/journal', 'https://770lab.com/havroutia/recherche', 'https://avinou-malkenou.web.app/cartes', 'https://koulam.app/tehilim',
-      'https://770lab.com/', 'https://770lab.com/autre', 'https://exemple.fr/home/', 'pas une adresse', '']) r[u] = S.projetDeLaPage(u);
+      'https://770lab.com/gescom/', 'https://www.770lab.com/GesCom/clients', 'https://770lab.com/', 'https://770lab.com/autre', 'https://exemple.fr/home/', 'pas une adresse', '']) r[u] = S.projetDeLaPage(u);
     return { r, projets: S.projets.map((p) => p.id + '=' + p.nom).join(',') };
   });
   const REGLE = { 'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots': 'pupitre', 'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home',
     'https://www.770lab.com/HOME/journal': 'home', 'https://770lab.com/havroutia/recherche': 'havroutia', 'https://avinou-malkenou.web.app/cartes': 'avinou',
-    'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
+    'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/gescom/': 'gescom', 'https://www.770lab.com/GesCom/clients': 'gescom', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
   const fausses = Object.keys(REGLE).filter((u) => regle.r[u] !== REGLE[u]);
   ok(!fausses.length, 'Signaler.projetDeLaPage : le projet d’une adresse, comme le relais' + (fausses.length ? ' — faux : ' + fausses.map((u) => u + ' → ' + regle.r[u]).join(' ; ') : ''));
-  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,koulam=KOULAM', 'Signaler.projets : les 5 projets, dans l’ordre du pupitre');
+  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,gescom=GesCom,koulam=KOULAM', 'Signaler.projets : les 6 projets, dans l’ordre du pupitre');
   await q0.ctx.close();
 
   remettre(); faux.projets.home = false;
@@ -825,7 +825,7 @@ try {
   await pr.p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
   const det = await pr.p.evaluate(() => window.__comptes.slice(-1)[0]);
   const parProjet = det && det.projets ? PROJETS.map((id) => id + ' ' + det.projets[id].aTraiter + '/' + det.projets[id].total).join(', ') : '';
-  ok(det && det.aTraiter === 4 && det.total === 10 && parProjet === 'home 1/3, pupitre 1/1, havroutia 1/2, avinou 1/2, koulam 0/1',
+  ok(det && det.aTraiter === 4 && det.total === 10 && parProjet === 'home 1/3, pupitre 1/1, havroutia 1/2, avinou 1/2, gescom 0/0, koulam 0/1',
     'l’événement « signaler:demandes » compte aussi par projet (à traiter / en tout) : ' + parProjet);
   const puceEtFiltres = async () => pr.p.evaluate(() => {
     const pc = document.querySelector('.sgn-puce'), f = document.querySelector('.sgn-filtres');
