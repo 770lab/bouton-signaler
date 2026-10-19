@@ -141,6 +141,19 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   (`{"actif":true}` pour le rallumer). La réponse dit depuis quand et par qui.
   Une page dont l'adresse n'est pas dans `ORIGINES` peut lire `GET /etat` (et seulement cette route) : la réponse porte alors
   `"origine": false` (sans « depuis » ni « par »), pour que le bouton dise « page non autorisée » au lieu de « relais injoignable ».
+- **Un interrupteur par projet**, en plus du général : la liste fixe `PROJETS` de `relay/coeur.mjs` (`home`, `pupitre`,
+  `havroutia`, `avinou`, `koulam`). Le projet d'une page vient de son adresse (`projetDeLaPage`, la même règle dans le bouton ;
+  une adresse d'aucun projet ne suit que le général). Le bouton d'un projet se montre seulement si le général ET le sien sont
+  activés ; un projet jamais touché est activé.
+  - `GET /etat` rend aussi `projets: { <id>: { actif, depuis, par } }` (tous les projets) ; `actif` reste le GÉNÉRAL.
+    `GET /etat?projet=<id>` ajoute `projet` et `effectif` (général ET ce projet : ce que le bouton doit faire). Id inconnu : `400`.
+  - `POST /etat` avec `{"actif":false,"projet":"<id>"}` coupe ce projet seulement (même clé, mêmes règles ; id inconnu : `400`) ;
+    sans `projet`, c'est le général, comme avant. La réponse est l'état complet.
+  - `POST /signaler` est refusé (`403`, `coupe: true`) quand le projet de la page (`contexte.url`) est coupé. Chaque demande
+    garde son `projet` (aussi dans `GET /demandes` ; une demande d'avant : celui de l'adresse de sa page).
+  - KOULAM n'envoie rien au relais (sa bulle « Modifier avec Claude » a sa propre routine) : il lit seulement
+    `GET /etat?projet=koulam` pour savoir s'il montre sa bulle ; koulam.app n'a pas besoin d'être dans `ORIGINES`.
+  - Ajouter un projet : une ligne dans `PROJETS` et sa règle dans `projetDeLaPage` (relais ET bouton), puis redéployer.
 
 **Mettre à jour une installation existante** — les trois morceaux, sinon rien ne change pour personne (le relais neuf avec
 un ancien bouton n'affiche ni « Mes demandes » ni le badge ; le bouton neuf avec un ancien relais non plus) :

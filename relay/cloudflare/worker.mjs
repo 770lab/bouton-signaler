@@ -14,7 +14,8 @@
 // Routes : POST /signaler · GET /piece/<id> (une capture ou la note, sous une adresse de 128 bits)
 //          GET /demandes (les miennes, d'après ma clé) · POST /demandes/<réf>/renvoyer (une demande pas partie)
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, avec son jeton)
-//          GET /etat · POST /etat (l'interrupteur du pupitre : le bouton activé ou coupé partout) · OPTIONS (CORS)
+//          GET /etat[?projet=<id>] · POST /etat (les interrupteurs du pupitre : le bouton activé ou coupé partout, ou dans un
+//          projet de C.PROJETS) · OPTIONS (CORS)
 import * as C from '../coeur.mjs';
 
 const PIECE_RX = /^\/piece\/([0-9a-f]{32})$/;
@@ -66,7 +67,8 @@ async function lireIndex(st, qui) {
   const x = lireJson(await st.lireTexte(C.cleIndex(qui)));
   return Array.isArray(x) ? x : [];
 }
-// L'interrupteur. Stockage absent ou en panne : activé (le bouton marche comme avant plutôt que de se taire sans raison).
+// Les interrupteurs (général et par projet). Stockage absent ou en panne : activés (le bouton marche comme avant plutôt que de se
+// taire sans raison).
 async function etatDuBouton(st) {
   if (!st) return C.etatBouton(null);
   try { return C.etatBouton(lireJson(await st.lireTexte(C.CLE_ETAT))); } catch (e) { return C.etatBouton(null); }
@@ -113,13 +115,16 @@ export async function signaler(req, env, outils) {
   const taille = Number(req.headers.get('Content-Length') || 0);
   if (taille > C.LIMITES.corpsOctets) return json({ ok: false, erreur: 'signalement trop lourd' }, 413, cors);
   const st = stockage(env);
-  // Coupé depuis le pupitre : rien n'est rangé, la routine n'est pas appelée.
-  if (!(await etatDuBouton(st)).actif) return json(COUPE, 403, cors);
+  // Coupé depuis le pupitre (partout, ou dans le projet de la page) : rien n'est rangé, la routine n'est pas appelée.
+  const interrupteurs = await etatDuBouton(st);
+  if (!interrupteurs.actif) return json(COUPE, 403, cors);
   let corps;
   try { const t = await req.text(); if (t.length > C.LIMITES.corpsOctets) return json({ ok: false, erreur: 'signalement trop lourd' }, 413, cors); corps = JSON.parse(t); }
   catch (e) { return json({ ok: false, erreur: 'signalement illisible' }, 400, cors); }
   const lu = C.lireSignalement(corps);
   if (!lu.ok) return json({ ok: false, erreur: lu.erreur }, 400, cors);
+  // Le projet vient de l'adresse de la page (la même règle que le bouton).
+  if (!C.boutonActif(interrupteurs, C.projetDeLaPage(lu.s.contexte.url))) return json(COUPE, 403, cors);
   const s = lu.s, ref = C.nouvelId().slice(0, 12), base = new URL(req.url).origin, pieces = [];
   if (st) {
     const ranger = async (genre, mime, octets, extra) => {
@@ -178,7 +183,7 @@ export async function renvoyer(req, env, outils, id) {
   if (!d || d.qui !== a.qui) return json({ ok: false, erreur: 'demande introuvable' }, 404, cors);
   const suivi = env.MONTRER_SUIVI === 'oui';
   if (d.etat !== 'pas_partie' || !d.texteRoutine) return json({ ok: false, erreur: 'cette demande est déjà partie', demande: C.demandePublique(d, { suivi: suivi }) }, 409, cors);
-  if (!(await etatDuBouton(st)).actif) return json(COUPE, 403, cors);
+  if (!C.boutonActif(await etatDuBouton(st), C.projetDeLaDemande(d))) return json(COUPE, 403, cors);
   const jeton = C.nouvelId(), quand = Date.now();
   const texte = C.avecRetour(d.texteRoutine, { url: new URL(req.url).origin + '/retour', id: id, cle: jeton });
   const r = await C.prevenirRoutine({ url: env.ROUTINE_URL, jeton: env.ROUTINE_JETON, texte: texte, fetch: outils.fetch, attendre: outils.attendre });
@@ -206,19 +211,25 @@ export async function retour(req, env) {
   return json({ ok: true }, 200);
 }
 
-// GET /etat : l'interrupteur, lisible par tous (sans clé) ; le bouton le lit avant de se montrer.
+// GET /etat : les interrupteurs, lisibles par tous (sans clé) ; le bouton les lit avant de se montrer. « actif » = le GÉNÉRAL
+// (comme avant), « projets » = celui de chaque projet de C.PROJETS. Avec ?projet=<id> : en plus « projet » et « effectif »
+// (le général ET ce projet : ce que le bouton de ce projet doit faire). Un id inconnu : 400.
 // Une page hors d'ORIGINES le lit AUSSI (Access-Control-Allow-Origin « * », réponse sans clé ni secret), avec `origine: false` :
 // sans cela, le navigateur cache le refus et le bouton d'un projet oublié dans ORIGINES croit le relais injoignable, au lieu
 // de dire « page non autorisée ». Elle ne reçoit ni « depuis » ni « par » (le nom de qui a coupé) : elle n'en a pas besoin.
 // Les autres routes restent fermées à ces pages (pas d'en-têtes CORS, préliminaire OPTIONS refusé).
 export async function etat(req, env) {
-  const e = await etatDuBouton(stockage(env)), o = req.headers.get('Origin');
-  if (o && !C.origineAutorisee(o, env.ORIGINES))
-    return json({ ok: true, actif: e.actif, depuis: null, par: null, origine: false }, 200, { 'Vary': 'Origin', 'Access-Control-Allow-Origin': '*' });
-  return json(Object.assign({ ok: true }, e), 200, entetesCors(req, env));
+  const o = req.headers.get('Origin'), autre = !!o && !C.origineAutorisee(o, env.ORIGINES);
+  const entetes = autre ? { 'Vary': 'Origin', 'Access-Control-Allow-Origin': '*' } : entetesCors(req, env);
+  const q = new URL(req.url).searchParams, projet = q.has('projet') ? q.get('projet') : null;
+  if (projet !== null && !C.estProjet(projet)) return json({ ok: false, erreur: 'projet inconnu' }, 400, entetes);
+  const v = C.vueEtat(await etatDuBouton(stockage(env)), { projet: projet, masquer: autre });
+  if (autre) v.origine = false;
+  return json(v, 200, entetes);
 }
 
-// POST /etat { actif } : activer ou couper le bouton partout. Clé d'équipe exigée, d'où que vienne l'appel.
+// POST /etat { actif } : activer ou couper le bouton partout ; { actif, projet } : dans ce projet seulement. Clé d'équipe exigée,
+// d'où que vienne l'appel. La réponse : l'état complet, comme GET /etat (avec « projet » et « effectif » pour un projet).
 export async function changerEtat(req, env) {
   const cors = entetesCors(req, env);
   const a = acces(req, env, cors, true);
@@ -228,10 +239,10 @@ export async function changerEtat(req, env) {
   const b = await petitCorps(req, C.LIMITES.etatOctets);
   const v = b.corps !== undefined ? C.lireEtatBouton(b.corps) : { ok: false, erreur: b.trop ? 'réglage trop lourd' : 'réglage illisible' };
   if (!v.ok) return json({ ok: false, erreur: v.erreur }, 400, cors);
-  const e = C.changerEtatBouton(lireJson(await st.lireTexte(C.CLE_ETAT)), v.actif, a.qui, Date.now());
+  const e = C.changerEtatBouton(lireJson(await st.lireTexte(C.CLE_ETAT)), v.actif, a.qui, Date.now(), v.projet);
   await st.ecrireTexte(C.CLE_ETAT, JSON.stringify(e));
-  console.log('[etat]', JSON.stringify({ actif: e.actif, qui: a.qui }));
-  return json(Object.assign({ ok: true }, C.etatBouton(e)), 200, cors);
+  console.log('[etat]', JSON.stringify({ actif: v.actif, projet: v.projet || 'tous', qui: a.qui }));
+  return json(C.vueEtat(C.etatBouton(e), { projet: v.projet }), 200, cors);
 }
 
 async function piece(id, env) {

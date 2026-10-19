@@ -33,6 +33,10 @@ const signalement = (extra) => Object.assign({ type: 'bug', texte: 'Le bouton En
   contexte: { url: 'https://app.exemple.fr/clients/42', titre: 'Client 42', version: '1.4.2', appareil: 'iPhone', taille: '390×844', erreurs: ['✖ TypeError: x is undefined'] } }, extra || {});
 // Les pièces rangées (clés de 32 hex), à part des demandes, des listes et de l'interrupteur.
 const pieces = (objets) => [...objets.entries()].filter(([k]) => /^[0-9a-f]{32}$/.test(k));
+// Les interrupteurs par défaut : le général et chaque projet, activés, sans « depuis » ni « par ».
+const ACTIF = { actif: true, depuis: null, par: null };
+const tousActifs = () => Object.fromEntries(C.PROJETS.map((p) => [p.id, Object.assign({}, ACTIF)]));
+const etatDefaut = (extra) => Object.assign({ ok: true }, ACTIF, { projets: tousActifs() }, extra || {});
 
 test('les clés d’équipe : le nom vient de la clé, une clé courte ou inconnue est refusée', () => {
   assert.deepEqual(C.verifierCle(CLE_MARIE, 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL), { ok: true, nom: 'marie' });
@@ -122,12 +126,12 @@ test('le corps de /retour est vérifié : états de la routine seulement, résum
 test('l’interrupteur, la vue publique d’une demande, la liste d’une personne', () => {
   assert.deepEqual(C.lireEtatBouton({ actif: false }), { ok: true, actif: false });
   for (const x of [{ actif: 'non' }, {}, [], null, 'false']) assert.equal(C.lireEtatBouton(x).ok, false);
-  assert.deepEqual(C.etatBouton(null), { actif: true, depuis: null, par: null }, 'rien de rangé : activé');
-  assert.deepEqual(C.etatBouton({ actif: 'peut-être' }), { actif: true, depuis: null, par: null });
+  assert.deepEqual(C.etatBouton(null), Object.assign({}, ACTIF, { projets: tousActifs() }), 'rien de rangé : activé');
+  assert.deepEqual(C.etatBouton({ actif: 'peut-être' }), Object.assign({}, ACTIF, { projets: tousActifs() }));
   const coupe = C.changerEtatBouton(null, false, 'marie', 1000);
-  assert.deepEqual(coupe, { actif: false, depuis: 1000, par: 'marie' });
+  assert.deepEqual(coupe, { actif: false, depuis: 1000, par: 'marie', projets: tousActifs() });
   assert.deepEqual(C.changerEtatBouton(coupe, false, 'paul', 2000), coupe, 'même état : depuis et par ne bougent pas');
-  assert.deepEqual(C.changerEtatBouton(coupe, true, 'paul', 3000), { actif: true, depuis: 3000, par: 'paul' });
+  assert.deepEqual(C.changerEtatBouton(coupe, true, 'paul', 3000), { actif: true, depuis: 3000, par: 'paul', projets: tousActifs() });
 
   const d = { id: 'abc123abc123', qui: 'marie', etat: 'envoyee', texte: 't', sessionUrl: 'https://claude.ai/code/session_01X', retourHash: 'h'.repeat(64), texteRoutine: 'secret' };
   assert.deepEqual(C.demandePublique(d), { id: 'abc123abc123', qui: 'marie', etat: 'envoyee', texte: 't' });
@@ -310,24 +314,24 @@ test('l’interrupteur : GET /etat (activé par défaut, sans clé), POST /etat 
   // Sans stockage : activé, et on ne peut pas le couper.
   let env = env0(); env.PIECES = undefined;
   let rep = await appel(env, null, 'GET', '/etat', { cle: null });
-  assert.equal(rep.status, 200); assert.deepEqual(await rep.json(), { ok: true, actif: true, depuis: null, par: null });
+  assert.equal(rep.status, 200); assert.deepEqual(await rep.json(), etatDefaut());
   assert.equal(rep.headers.get('Cache-Control'), 'no-store'); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE);
   rep = await appel(env, null, 'POST', '/etat', { corps: { actif: false } });
   assert.equal(rep.status, 503); assert.deepEqual(await rep.json(), { ok: false, erreur: 'le relais n’a pas de stockage' });
 
   env = envKv(); const R = routine();
-  assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), { ok: true, actif: true, depuis: null, par: null }, 'rien de rangé : activé');
+  assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), etatDefaut(), 'rien de rangé : activé');
   // Une page hors d'ORIGINES (un projet oublié) LIT la réponse et apprend qu'elle n'est pas autorisée, au lieu de croire le relais
   // injoignable ; elle ne reçoit pas les en-têtes du préliminaire, et les routes à clé lui restent fermées.
   const pirate = await appel(env, null, 'GET', '/etat', { cle: null, origine: 'https://pirate.fr' });
   assert.equal(pirate.status, 200); assert.equal(pirate.headers.get('Access-Control-Allow-Origin'), '*');
   assert.equal(pirate.headers.get('Access-Control-Allow-Headers'), null); assert.equal(pirate.headers.get('Cache-Control'), 'no-store');
   assert.match(pirate.headers.get('Vary') || '', /Origin/);
-  assert.deepEqual(await pirate.json(), { ok: true, actif: true, depuis: null, par: null, origine: false });
+  assert.deepEqual(await pirate.json(), etatDefaut({ origine: false }));
   const preliminaire = await routeur(new Request(BASE + '/etat', { method: 'OPTIONS', headers: { Origin: 'https://pirate.fr' } }), env);
   assert.equal(preliminaire.headers.get('Access-Control-Allow-Origin'), null, 'pas de préliminaire pour une autre page');
   const sansOrigine = await appel(env, null, 'GET', '/etat', { cle: null, origine: null });
-  assert.deepEqual(await sansOrigine.json(), { ok: true, actif: true, depuis: null, par: null }, 'en ligne de commande : la réponse habituelle');
+  assert.deepEqual(await sansOrigine.json(), etatDefaut(), 'en ligne de commande : la réponse habituelle');
 
   rep = await appel(env, null, 'POST', '/etat', { corps: { actif: false }, cle: null });
   assert.equal(rep.status, 401); assert.equal((await rep.json()).cle, true);
@@ -345,9 +349,9 @@ test('l’interrupteur : GET /etat (activé par défaut, sans clé), POST /etat 
   assert.equal(j.ok, true); assert.equal(j.actif, false); assert.equal(j.par, 'marie'); assert.equal(typeof j.depuis, 'number');
   const rangee = env.PIECES_KV.objets.get('etat');
   assert.equal(rangee.o && rangee.o.expirationTtl, undefined, 'l’interrupteur ne s’efface pas');
-  assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), { ok: true, actif: false, depuis: j.depuis, par: 'marie' });
+  assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null })).json(), etatDefaut({ actif: false, depuis: j.depuis, par: 'marie' }));
   assert.deepEqual(await (await appel(env, null, 'GET', '/etat', { cle: null, origine: 'https://pirate.fr' })).json(),
-    { ok: true, actif: false, depuis: null, par: null, origine: false }, 'une autre page voit l’état, pas qui l’a changé');
+    etatDefaut({ actif: false, origine: false }), 'une autre page voit l’état, pas qui l’a changé');
 
   rep = await appel(env, R, 'POST', '/signaler', { corps: signalement() });
   assert.equal(rep.status, 403);
@@ -535,4 +539,223 @@ test('le journal du relais ne porte ni texte, ni clé, ni jeton', async () => {
   const tout = journal.join('\n');
   assert.ok(journal.length >= 3);
   for (const secret of ['Texte privé', 'Résumé privé', CLE_MARIE, jetonDe(R.appels[0].corps.text), 'sk-ant-oat01-FAUX']) assert.ok(!tout.includes(secret), secret);
+});
+
+// ——— Un interrupteur par projet (en plus du général) ———
+
+// Une page de chaque projet, telle que le bouton l'envoie dans contexte.url.
+const PAGES = { home: 'https://770lab.com/home/', pupitre: 'https://770lab.com/home/robots.html', havroutia: 'https://770lab.com/havroutia/',
+  avinou: 'https://avinou-malkenou.web.app/', koulam: 'https://koulam.app/' };
+const depuisLaPage = (url) => signalement({ contexte: { url: url, titre: 'Une page' } });
+const etatDe = async (env, projet, o) => (await appel(env, null, 'GET', '/etat' + (projet ? '?projet=' + encodeURIComponent(projet) : ''), Object.assign({ cle: null }, o || {}))).json();
+
+test('les projets : la liste fixe, et le projet d’une page d’après son adresse', () => {
+  assert.deepEqual(C.PROJETS.map((p) => [p.id, p.nom]),
+    [['home', 'Home'], ['pupitre', 'Pupitre'], ['havroutia', 'HavroutIA'], ['avinou', 'Avinou Malkenou'], ['koulam', 'KOULAM']]);
+  assert.throws(() => { C.PROJETS.push({ id: 'x', nom: 'X' }); }, 'la liste ne se change pas en cours de route');
+  for (const id of ['home', 'pupitre', 'havroutia', 'avinou', 'koulam']) assert.equal(C.estProjet(id), true, id);
+  for (const x of ['Home', 'KOULAM', '', 'tous', '__proto__', 'constructor', 'toString', null, undefined, 1, {}]) assert.equal(C.estProjet(x), false, String(x));
+
+  const attendu = {
+    'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots.html?demo=1#claude': 'pupitre', 'https://770lab.com/home/robots': 'pupitre',
+    'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home', 'https://770lab.com/home/index.html?x=1': 'home', 'https://www.770lab.com/Home/': 'home',
+    'https://770lab.com/havroutia/': 'havroutia', 'https://770lab.com/havroutia/index.html#etude': 'havroutia',
+    'https://avinou-malkenou.web.app/': 'avinou', 'https://avinou-malkenou.web.app/carte/12': 'avinou',
+    'https://koulam.app/': 'koulam', 'https://koulam.app/tefila/brachot/birkat_halevana': 'koulam', 'https://www.koulam.app/': 'koulam',
+    'https://770lab.com/': null, 'https://770lab.com/studio/': null, 'https://770lab.com/robots/home': null,
+    'https://pirate.fr/home/robots.html': null, 'https://770lab.com.pirate.fr/home/': null, 'https://koulam.app.pirate.fr/': null,
+    'https://pirate.fr/?u=https://koulam.app': null, 'https://chabapp-5fc3b.firebaseapp.com/studio': null, 'https://app.exemple.fr/clients/42': null,
+    'javascript:alert(1)': null, 'pas une adresse': null, '': null,
+  };
+  for (const [url, id] of Object.entries(attendu)) assert.equal(C.projetDeLaPage(url), id, url);
+  assert.equal(C.projetDeLaPage(null), null); assert.equal(C.projetDeLaPage(undefined), null);
+  assert.equal(C.projetDeLaDemande({ projet: 'havroutia', page: { url: PAGES.koulam } }), 'havroutia', 'le champ de la demande passe avant son adresse');
+  assert.equal(C.projetDeLaDemande({ page: { url: PAGES.avinou } }), 'avinou', 'une demande d’avant : son adresse');
+  assert.equal(C.projetDeLaDemande({ projet: 'inconnu', page: { url: PAGES.home } }), 'home');
+  assert.equal(C.projetDeLaDemande({ projet: null }), null); assert.equal(C.projetDeLaDemande(null), null);
+});
+
+test('les interrupteurs par projet (pur) : ancien état, valeurs par défaut, un projet à la fois, id inconnu', () => {
+  // Un état rangé AVANT les projets : le général est lu tel quel, chaque projet est activé.
+  const ancien = { actif: false, depuis: 5, par: 'marie' };
+  assert.deepEqual(C.etatBouton(ancien), { actif: false, depuis: 5, par: 'marie', projets: tousActifs() });
+  // Des projets en partie rangés, ou mal formés : le reste prend la valeur par défaut ; un projet hors de la liste est oublié.
+  const partiel = C.etatBouton({ actif: true, depuis: 1, par: 'paul', projets: { koulam: { actif: false, depuis: 9, par: 'marie' },
+    home: { actif: 'non' }, avinou: null, pirate: { actif: false }, __proto__: { actif: false } } });
+  assert.deepEqual(partiel.projets, Object.assign(tousActifs(), { koulam: { actif: false, depuis: 9, par: 'marie' } }));
+  assert.deepEqual(Object.keys(partiel.projets), C.PROJETS.map((p) => p.id), 'tous les projets, dans l’ordre de la liste');
+  for (const x of [{ projets: [] }, { projets: 'non' }, { actif: true, projets: null }]) assert.deepEqual(C.etatBouton(x).projets, tousActifs());
+
+  // Couper un projet : lui seul bouge ; le général et les autres projets gardent leur « depuis » et leur « par ».
+  const g = C.changerEtatBouton(null, false, 'marie', 1000);
+  const h = C.changerEtatBouton(g, false, 'paul', 2000, 'havroutia');
+  assert.deepEqual(h, { actif: false, depuis: 1000, par: 'marie', projets: Object.assign(tousActifs(), { havroutia: { actif: false, depuis: 2000, par: 'paul' } }) });
+  assert.deepEqual(C.changerEtatBouton(h, false, 'marie', 3000, 'havroutia'), h, 'même état : depuis et par ne bougent pas');
+  const k = C.changerEtatBouton(h, false, 'marie', 4000, 'koulam');
+  assert.deepEqual(k.projets.havroutia, h.projets.havroutia); assert.deepEqual(k.projets.koulam, { actif: false, depuis: 4000, par: 'marie' });
+  const r = C.changerEtatBouton(k, true, 'paul', 5000);
+  assert.deepEqual(r.projets, k.projets, 'rallumer le général ne rallume aucun projet');
+  assert.deepEqual([r.actif, r.depuis, r.par], [true, 5000, 'paul']);
+  assert.deepEqual(C.changerEtatBouton(ancien, false, 'paul', 6000, 'home'),
+    { actif: false, depuis: 5, par: 'marie', projets: Object.assign(tousActifs(), { home: { actif: false, depuis: 6000, par: 'paul' } }) }, 'ancien état : le général est gardé');
+  for (const x of ['inconnu', 'Home', '__proto__', '']) assert.throws(() => C.changerEtatBouton(null, false, 'marie', 1, x), x);
+
+  // Ce que le bouton d'un projet doit faire : le général ET le sien.
+  assert.equal(C.boutonActif(r, 'home'), true); assert.equal(C.boutonActif(r, 'havroutia'), false); assert.equal(C.boutonActif(r, 'koulam'), false);
+  assert.equal(C.boutonActif(r, null), true, 'aucun projet : le général seul');
+  assert.equal(C.boutonActif(h, 'home'), false, 'général coupé : coupé partout');
+  assert.equal(C.boutonActif(h, null), false);
+  assert.equal(C.boutonActif(null, 'koulam'), true, 'rien de rangé : activé');
+  assert.equal(C.boutonActif({ actif: true, projets: { avinou: { actif: false } } }, 'avinou'), false, 'un état rangé, lu tel quel');
+
+  // Le corps de POST /etat.
+  assert.deepEqual(C.lireEtatBouton({ actif: false, projet: 'koulam' }), { ok: true, actif: false, projet: 'koulam' });
+  assert.deepEqual(C.lireEtatBouton({ actif: true, projet: null }), { ok: true, actif: true }, 'projet null : le général');
+  for (const projet of ['inconnu', 'KOULAM', '', 3, ['home'], { id: 'home' }, '__proto__'])
+    assert.deepEqual(C.lireEtatBouton({ actif: false, projet }), { ok: false, erreur: 'projet inconnu' }, String(projet));
+  assert.equal(C.lireEtatBouton({ projet: 'home' }).ok, false, 'sans actif : illisible');
+
+  // La vue de GET /etat.
+  const v = C.vueEtat(C.etatBouton(k), { projet: 'koulam' });
+  assert.equal(v.ok, true); assert.equal(v.actif, false); assert.equal(v.projet, 'koulam'); assert.equal(v.effectif, false);
+  assert.deepEqual(v.projets.koulam, { actif: false, depuis: 4000, par: 'marie' });
+  const m = C.vueEtat(C.etatBouton(k), { projet: 'home', masquer: true });
+  assert.deepEqual(m, { ok: true, actif: false, depuis: null, par: null, projets: Object.assign(tousActifs(), { havroutia: Object.assign({}, ACTIF, { actif: false }),
+    koulam: Object.assign({}, ACTIF, { actif: false }) }), projet: 'home', effectif: false }, 'masquée : ni depuis ni par, nulle part');
+  assert.equal('projet' in C.vueEtat(C.etatBouton(null)), false); assert.equal('effectif' in C.vueEtat(C.etatBouton(null)), false);
+});
+
+test('GET /etat?projet=<id> : « projet » et « effectif » pour chaque projet ; id inconnu = 400 ; une autre page aussi', async () => {
+  const env = envKv();
+  for (const p of C.PROJETS) assert.deepEqual(await etatDe(env, p.id), etatDefaut({ projet: p.id, effectif: true }), p.id);
+  let rep = await appel(env, null, 'GET', '/etat?projet=inconnu', { cle: null });
+  assert.equal(rep.status, 400); assert.deepEqual(await rep.json(), { ok: false, erreur: 'projet inconnu' });
+  assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE, 'la page peut lire l’erreur');
+  for (const q of ['?projet=', '?projet=KOULAM', '?projet=__proto__', '?projet=home%00']) assert.equal((await appel(env, null, 'GET', '/etat' + q, { cle: null })).status, 400, q);
+
+  assert.equal((await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'avinou' } })).status, 200);
+  for (const p of C.PROJETS) {
+    const j = await etatDe(env, p.id);
+    assert.equal(j.actif, true, 'le général reste activé'); assert.equal(j.projet, p.id);
+    assert.equal(j.effectif, p.id !== 'avinou', p.id); assert.equal(j.projets.avinou.actif, false);
+  }
+  assert.equal((await etatDe(env, 'avinou')).projets.avinou.par, 'marie');
+  assert.equal('effectif' in (await etatDe(env)), false, 'sans projet : la réponse habituelle (le général dans « actif »)');
+
+  // Une page hors d'ORIGINES : l'état de son projet, sans depuis ni par.
+  const pirate = await appel(env, null, 'GET', '/etat?projet=avinou', { cle: null, origine: 'https://pirate.fr' });
+  assert.equal(pirate.headers.get('Access-Control-Allow-Origin'), '*');
+  const jp = await pirate.json();
+  assert.equal(jp.origine, false); assert.equal(jp.effectif, false); assert.equal(jp.projet, 'avinou');
+  assert.deepEqual(jp.projets.avinou, { actif: false, depuis: null, par: null });
+  const inconnu = await appel(env, null, 'GET', '/etat?projet=x', { cle: null, origine: 'https://pirate.fr' });
+  assert.equal(inconnu.status, 400); assert.equal(inconnu.headers.get('Access-Control-Allow-Origin'), '*');
+
+  // Le général coupé : effectif faux partout, chaque projet garde son propre état.
+  await appel(env, null, 'POST', '/etat', { corps: { actif: false } });
+  for (const p of C.PROJETS) {
+    const j = await etatDe(env, p.id);
+    assert.equal(j.effectif, false, p.id); assert.equal(j.projets[p.id].actif, p.id !== 'avinou', p.id);
+  }
+  // Sans stockage : tout activé.
+  assert.deepEqual(await etatDe(Object.assign(env0(), { PIECES: undefined }), 'koulam'), etatDefaut({ projet: 'koulam', effectif: true }));
+});
+
+test('POST /etat { actif, projet } : ce projet seulement, clé exigée, id inconnu = 400, ancien état gardé', async () => {
+  const env = envKv();
+  assert.equal((await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'koulam' }, cle: null })).status, 401);
+  assert.equal((await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'koulam' }, origine: 'https://pirate.fr' })).status, 403);
+  let rep = await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'inconnu' } });
+  assert.equal(rep.status, 400); assert.deepEqual(await rep.json(), { ok: false, erreur: 'projet inconnu' });
+  assert.equal(env.PIECES_KV.objets.size, 0, 'aucun refus n’a rien rangé');
+
+  rep = await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'koulam' } });
+  let j = await rep.json();
+  assert.equal(rep.status, 200); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE);
+  assert.equal(j.ok, true); assert.equal(j.actif, true, 'le général ne bouge pas'); assert.equal(j.projet, 'koulam'); assert.equal(j.effectif, false);
+  assert.equal(j.projets.koulam.actif, false); assert.equal(j.projets.koulam.par, 'marie'); assert.equal(typeof j.projets.koulam.depuis, 'number');
+  for (const p of C.PROJETS) if (p.id !== 'koulam') assert.deepEqual(j.projets[p.id], ACTIF, p.id);
+  assert.deepEqual(await etatDe(env, 'koulam'), j, 'la réponse est l’état complet, comme GET /etat?projet=koulam');
+  const rangee = env.PIECES_KV.objets.get('etat');
+  assert.equal(rangee.o && rangee.o.expirationTtl, undefined, 'rangé sans fin, avec le général');
+  assert.deepEqual(Object.keys(JSON.parse(rangee.v)).sort(), ['actif', 'depuis', 'par', 'projets']);
+
+  // En ligne de commande (sans Origin), avec la clé de paul : rallumer KOULAM.
+  j = await (await appel(env, null, 'POST', '/etat', { corps: { actif: true, projet: 'koulam' }, origine: null, cle: CLE_PAUL })).json();
+  assert.deepEqual(j.projets.koulam.actif, true); assert.equal(j.projets.koulam.par, 'paul'); assert.equal(j.effectif, true);
+
+  // Un état rangé AVANT les projets (le relais d'hier) : lu tel quel, et couper un projet garde le général.
+  const vieux = envKv();
+  await vieux.PIECES_KV.put('etat', JSON.stringify({ actif: false, depuis: 5, par: 'marie' }));
+  assert.deepEqual(await etatDe(vieux), etatDefaut({ actif: false, depuis: 5, par: 'marie' }));
+  assert.equal((await etatDe(vieux, 'home')).effectif, false);
+  j = await (await appel(vieux, null, 'POST', '/etat', { corps: { actif: false, projet: 'home' }, cle: CLE_PAUL })).json();
+  assert.deepEqual([j.actif, j.depuis, j.par], [false, 5, 'marie']); assert.equal(j.projets.home.par, 'paul');
+  j = await (await appel(vieux, null, 'POST', '/etat', { corps: { actif: true } })).json();
+  assert.equal(j.actif, true); assert.equal(j.projets.home.actif, false, 'rallumer le général ne rallume pas Home');
+});
+
+test('POST /signaler : refusé quand le projet de la page est coupé (lui seul), ou quand le général l’est (tous)', async () => {
+  for (const p of C.PROJETS) {
+    const env = envKv(), R = routine();
+    await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: p.id } });
+    const rep = await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage(PAGES[p.id]) });
+    assert.equal(rep.status, 403, p.id);
+    assert.deepEqual(await rep.json(), { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' });
+    assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE);
+    assert.equal(R.appels.length, 0, p.id + ' : la routine n’est pas appelée');
+    assert.deepEqual([...env.PIECES_KV.objets.keys()], ['etat'], p.id + ' : rien n’est rangé');
+    for (const autre of C.PROJETS) {
+      if (autre.id === p.id) continue;
+      assert.equal((await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage(PAGES[autre.id]) })).status, 200, p.id + ' coupé, ' + autre.id + ' passe');
+    }
+    assert.equal((await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage('https://app.exemple.fr/clients/42') })).status, 200, 'une page d’aucun projet passe');
+    assert.equal(R.appels.length, C.PROJETS.length);
+  }
+  const env = envKv(), R = routine();
+  await appel(env, null, 'POST', '/etat', { corps: { actif: false } });
+  for (const url of Object.values(PAGES).concat(['https://app.exemple.fr/clients/42']))
+    assert.equal((await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage(url) })).status, 403, url);
+  assert.equal(R.appels.length, 0);
+  // Le projet vient de l'adresse de la page, même avec des majuscules ou « www ».
+  await appel(env, null, 'POST', '/etat', { corps: { actif: true } });
+  await appel(env, null, 'POST', '/etat', { corps: { actif: false, projet: 'pupitre' } });
+  assert.equal((await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage('https://www.770lab.com/Home/Robots.html?demo=1') })).status, 403);
+  assert.equal((await appel(env, R, 'POST', '/signaler', { corps: depuisLaPage('https://770lab.com/home/') })).status, 200, 'Home n’est pas le pupitre');
+});
+
+test('chaque demande porte son projet (rangée et dans GET /demandes) ; « Renvoyer » suit l’interrupteur de son projet', async () => {
+  const env = envKv(), R = routine();
+  const refs = {};
+  for (const p of C.PROJETS) refs[p.id] = (await envoyer(env, R, {}, { contexte: { url: PAGES[p.id], titre: p.nom } })).ref;
+  const sans = (await envoyer(env, R)).ref;
+  for (const p of C.PROJETS) assert.equal(lireDemande(env, refs[p.id]).projet, p.id, p.id);
+  assert.equal(lireDemande(env, sans).projet, null, 'une page d’aucun projet : null');
+  const liste = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes;
+  for (const p of C.PROJETS) assert.equal(liste.find((d) => d.id === refs[p.id]).projet, p.id, 'vue publique : ' + p.id);
+  assert.equal('projet' in liste.find((d) => d.id === sans), false, 'sans projet : le champ est absent de la vue publique');
+  assert.deepEqual(C.demandePublique({ id: 'abc123abc123', projet: 'koulam', retourHash: 'h' }), { id: 'abc123abc123', projet: 'koulam' });
+  assert.deepEqual(C.demandePublique({ id: 'abc123abc123', page: { url: PAGES.pupitre } }), { id: 'abc123abc123', page: { url: PAGES.pupitre }, projet: 'pupitre' },
+    'une demande d’avant les projets : celui de son adresse');
+  assert.deepEqual(C.demandePublique({ id: 'abc123abc123', projet: 'pirate', page: { url: 'https://pirate.fr/' } }), { id: 'abc123abc123', page: { url: 'https://pirate.fr/' } },
+    'un projet inconnu ne descend pas à la page');
+
+  // « Renvoyer » une demande pas partie : refusé si SON projet est coupé (champ « projet », sinon l'adresse de sa page).
+  const env2 = envKv(), R2 = routine([{ status: 429, json: {} }, { status: 429, json: {} }]);
+  const a = (await envoyer(env2, R2, {}, { contexte: { url: PAGES.havroutia } })).ref;
+  const b = (await envoyer(env2, R2, {}, { contexte: { url: PAGES.avinou } })).ref;
+  // Une demande rangée avant les projets (sans le champ) : son adresse fait foi.
+  const vieille = lireDemande(env2, b); delete vieille.projet;
+  await env2.PIECES_KV.put('demande:' + b, JSON.stringify(vieille), { expirationTtl: JOURS_180 });
+  await appel(env2, null, 'POST', '/etat', { corps: { actif: false, projet: 'havroutia' } });
+  await appel(env2, null, 'POST', '/etat', { corps: { actif: false, projet: 'avinou' } });
+  for (const ref of [a, b]) {
+    const rep = await appel(env2, R2, 'POST', '/demandes/' + ref + '/renvoyer');
+    assert.equal(rep.status, 403, ref); assert.equal((await rep.json()).coupe, true);
+  }
+  assert.equal(R2.appels.length, 2, 'aucun renvoi n’est parti');
+  await appel(env2, null, 'POST', '/etat', { corps: { actif: true, projet: 'avinou' } });
+  const rep = await appel(env2, R2, 'POST', '/demandes/' + b + '/renvoyer');
+  assert.equal(rep.status, 200); assert.equal((await rep.json()).demande.projet, 'avinou', 'vue publique : le projet retrouvé par l’adresse');
+  assert.equal(R2.appels.length, 3);
 });
