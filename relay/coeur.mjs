@@ -11,7 +11,9 @@
 //
 // Ce fichier porte aussi : la connexion par EMPREINTE (WebAuthn : CBOR, clés COSE, signatures, jeton de session signé HMAC),
 // le MODE de chaque projet (direct / à valider), les DEUX abonnements Claude (et le passage de l'un à l'autre), le journal de la
-// page et les éléments entourés recopiés dans le texte de la routine, et les travaux ANNULER / VALIDER écrits par le relais.
+// page et les éléments entourés recopiés dans le texte de la routine, les travaux ANNULER / VALIDER écrits par le relais, les
+// clés d'équipe créées depuis le pupitre (« Nouvelle clé », avec l'empreinte) et les appareils DE CONFIANCE (une clé d'équipe
+// seule inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne).
 
 export const LIMITES = {
   texte: 4000,              // le texte écrit ou dicté
@@ -628,6 +630,7 @@ export const PROJETS = Object.freeze([
   { id: 'pupitre', nom: 'Pupitre' },
   { id: 'havroutia', nom: 'HavroutIA' },
   { id: 'avinou', nom: 'Avinou Malkenou' },
+  { id: 'gescom', nom: 'GesCom' },
   { id: 'koulam', nom: 'KOULAM' },
 ].map((p) => Object.freeze(p)));
 export const estProjet = (id) => typeof id === 'string' && PROJETS.some((p) => p.id === id);
@@ -644,6 +647,7 @@ export function projetDeLaPage(url) {
     if (chemin.startsWith('/home/robots')) return 'pupitre';
     if (chemin.startsWith('/home')) return 'home';
     if (chemin.startsWith('/havroutia')) return 'havroutia';
+    if (chemin.startsWith('/gescom')) return 'gescom';
     return null;
   }
   if (hote === 'avinou-malkenou.web.app') return 'avinou';
@@ -1093,10 +1097,31 @@ export async function verifierConnexion(o) {
 // Un appareil rangé est-il utilisable ? (Retiré : effacé, ou marqué « retire » quand le stockage ne sait pas effacer.)
 export const appareilValide = (ap, id) => !!(ap && typeof ap === 'object' && !ap.retire && ap.id === id && ap.qui && ap.rpId && ap.jwk
   && (ap.alg === -7 || ap.alg === -257));
-// Ce qu'une page voit d'un appareil (« Mes appareils »).
-export const appareilPublic = (ap, actuel) => ({ id: ap.id, nom: ap.nom, rpId: ap.rpId, creeLe: ap.creeLe, vuLe: ap.vuLe || null, actuel: !!actuel && ap.id === actuel });
+// LES APPAREILS DE CONFIANCE (champ « sur » de l'appareil rangé). Quiconque a la clé d'équipe (volée, collée au mauvais endroit)
+// peut inscrire SON appareil (une vraie clé d'accès sur son téléphone, ou un appareil logiciel : l'attestation « none » ne dit pas
+// ce qu'il est, et c'est lui qui pose le drapeau UV) et reçoit aussitôt une session à empreinte fraîche. Cette session ne doit pas
+// suffire à créer une nouvelle clé d'équipe (POST /auth/cle/nouvelle : l'ancienne cesserait de marcher, le propriétaire serait
+// enfermé dehors, et le Terminal ne le sauverait pas : l'intrus, toujours inscrit, recréerait une clé) ni à mettre en ligne
+// (POST /demandes/<réf>/valider). Ces deux gestes exigent un appareil DE CONFIANCE, c'est-à-dire inscrit :
+//   - avec la session d'un appareil de confiance ;
+//   - ou avec la clé seule quand la personne n'avait encore JAMAIS eu d'appareil (sa liste « appareils:<nom> » n'existe pas encore ;
+//     retirer tous ses appareils ne rouvre pas cette porte : la liste reste, vide) ;
+//   - ou avant ce changement (rangé sans le champ « sur ») : rien ne change pour les appareils déjà inscrits.
+// Sinon (la clé seule, alors que la personne a déjà eu un appareil) : sur = false. Cet appareil se connecte, signale, lit et
+// renvoie ses demandes comme avant ; « Nouvelle clé » et « Mettre en ligne » lui répondent 403 { confiance: true }.
+export const appareilDeConfiance = (ap) => !!ap && typeof ap === 'object' && ap.sur !== false;
+// Le nouvel appareil sera-t-il de confiance ? o : { appareil (celui de la session qui demande les options ; null = la clé seule),
+// jamaisInscrit (la personne n'a jamais eu d'appareil) }. Décidé aux options d'inscription, rangé dans le défi, puis dans l'appareil.
+export const inscriptionDeConfiance = (o) => (o && o.appareil ? appareilDeConfiance(o.appareil) : !!(o && o.jamaisInscrit === true));
+// Ce qu'une page voit d'un appareil (« Mes appareils ») ; « sur » : de confiance (le pupitre marque les autres).
+export const appareilPublic = (ap, actuel) => ({ id: ap.id, nom: ap.nom, rpId: ap.rpId, creeLe: ap.creeLe, vuLe: ap.vuLe || null, actuel: !!actuel && ap.id === actuel,
+  sur: appareilDeConfiance(ap) });
 // Le nom donné à un appareil à son inscription (« iPhone de Marie »), 60 caractères au plus.
 export const nomAppareil = (x) => propre(typeof x === 'string' ? x.replace(/\s+/g, ' ') : '', 60) || 'Appareil';
+// Le nom rangé à l'inscription : celui envoyé avec la clé d'accès créée (POST /auth/inscription { …, nom }), s'il y en a un, sinon
+// celui des options (le défi). La page ne sait qu'APRÈS la création si la clé vit sur un autre appareil (le téléphone par QR code,
+// une clé USB : authenticatorAttachment « cross-platform ») : elle corrige alors le nom. Mêmes caractères que nomAppareil.
+export const nomInscrit = (x, nomDefi) => (typeof x === 'string' && propre(x.replace(/\s+/g, ' '), 60) ? nomAppareil(x) : nomAppareil(nomDefi));
 // La liste des appareils d'une personne avec un de plus, en tête (sans doublon, LIMITES.appareils au plus) ; ou sans lui.
 export const appareilsAvec = (ids, id) => [id].concat((Array.isArray(ids) ? ids : []).filter((x) => x !== id && ID_APPAREIL_RX.test(String(x)))).slice(0, LIMITES.appareils);
 export const appareilsSans = (ids, id) => (Array.isArray(ids) ? ids : []).filter((x) => x !== id && ID_APPAREIL_RX.test(String(x)));
@@ -1142,4 +1167,72 @@ export function nomsDesCles(liste) {
     if (k.length >= 16 && !noms.includes(nom)) noms.push(nom);
   });
   return noms;
+}
+
+// ——— LES CLÉS D'ÉQUIPE CRÉÉES DEPUIS LE PUPITRE (POST /auth/cle/nouvelle) ———
+// Le propriétaire touche « Nouvelle clé » et pose le doigt d'un appareil DE CONFIANCE (voir appareilDeConfiance : un appareil
+// inscrit avec la clé seule ne le peut pas) : le relais tire une clé neuve et ne range que son EMPREINTE (sha256)
+// sous « cle:<nom> » : { h, creeLe, envRevoque, app }. `envRevoque` = l'empreinte de la clé que CLES lui donnait à cet instant
+// (de chacune, s'il en a plusieurs ; null s'il n'en a pas). Une 2e création remplace la 1re.
+// LA CLÉ LA PLUS RÉCENTE EST LA SEULE VALABLE, qu'elle vienne du pupitre ou du Terminal (le Terminal est le secours quand une clé a
+// fui : il doit gagner s'il est plus récent). Pour un nom de CLES, avec r = « cle:<nom> » et k = sa clé (ses clés) dans CLES :
+//   - pas de r : seule k vaut (comme avant le pupitre) ;
+//   - r et r.envRevoque = l'empreinte de k (CLES n'a pas bougé depuis la création au pupitre) : seule la clé rangée vaut, k est
+//     refusée ;
+//   - r et r.envRevoque ≠ l'empreinte de k (CLES changé au Terminal APRÈS la création au pupitre) : seule k vaut, la clé rangée est
+//     périmée (une nouvelle création au pupitre la rend de nouveau la seule valable).
+// Seule une personne présente dans CLES peut avoir une clé rangée : retirer quelqu'un de CLES retire tout.
+// Workers KV met jusqu'à 60 s à propager une écriture d'un lieu à l'autre : la nouvelle clé (et le refus de l'ancienne) vaut
+// partout dans la minute, rien à faire de plus.
+export const cleCle = (qui) => 'cle:' + qui;
+export const CLE_RX = /^[A-Za-z0-9_-]{24}$/;
+const EMPREINTE_RX = /^[0-9a-f]{64}$/;
+// 18 octets aléatoires → 24 caractères base64url (144 bits).
+export const nouvelleCle = () => b64u(aleatoire(18));
+// Les clés que CLES donne à ce nom (la même lecture que verifierCle : 16 caractères au moins).
+function clesDuNom(liste, nom) {
+  const cles = [];
+  String(liste || '').split(',').map((x) => x.trim()).filter(Boolean).forEach((ligne) => {
+    const i = ligne.indexOf(':');
+    const n = propre(i > 0 ? ligne.slice(0, i).trim() : 'équipe', 60), k = i > 0 ? ligne.slice(i + 1).trim() : ligne;
+    if (k.length >= 16 && n === nom) cles.push(k);
+  });
+  return cles;
+}
+// L'enregistrement rangé sous « cle:<qui> » (JAMAIS la clé elle-même). o : { cle, qui, liste (CLES), quand, app }.
+export async function nouvelleCleRangee(o) {
+  const hs = await Promise.all(clesDuNom(o.liste, o.qui).map(sha256Hex));
+  return { h: await sha256Hex(o.cle), creeLe: o.quand, envRevoque: hs.length === 0 ? null : hs.length === 1 ? hs[0] : hs, app: o.app || null };
+}
+// L'enregistrement lu pour ce nom : { h, revoques: [empreintes] } ou null (absent, pierre tombale, illisible).
+function cleRangeeLue(ranges, nom) {
+  const x = ranges && typeof ranges === 'object' && Object.prototype.hasOwnProperty.call(ranges, nom) ? ranges[nom] : null;
+  if (!x || typeof x !== 'object' || x.retire || typeof x.h !== 'string' || !EMPREINTE_RX.test(x.h)) return null;
+  return { h: x.h, revoques: [].concat(x.envRevoque == null ? [] : x.envRevoque).filter((e) => typeof e === 'string' && EMPREINTE_RX.test(e)) };
+}
+// Les mêmes empreintes, dans n'importe quel ordre (CLES n'a pas bougé pour ce nom depuis la création au pupitre).
+function memesEmpreintes(a, b) {
+  const x = [...new Set(a)].sort(), y = [...new Set(b)].sort();
+  return x.length === y.length && x.every((e, i) => egaux(e, y[i]));
+}
+// La clé présentée (X-Signaler-Cle) est-elle acceptée, et pour qui ? `ranges` = { <nom>: ce qui est lu sous « cle:<nom> » } pour
+// les noms de nomsDesCles(liste). Pour chaque nom, la seule clé valable est la plus récente (voir plus haut) ; tous les noms sont
+// passés en revue, comparaisons en temps constant ; le premier nom qui accepte la clé l'emporte (comme verifierCle). Rend { ok, nom,
+// par: 'rangee'|'cles' }, ou { ok: false } avec, pour une clé connue mais plus valable, remplacee: true (la clé de CLES, remplacée
+// depuis le pupitre) ou perimee: true (la clé du pupitre, CLES ayant changé depuis).
+export async function deciderCle(cle, liste, ranges) {
+  cle = String(cle || '').trim();
+  if (cle.length < 16) return { ok: false };
+  const h = await sha256Hex(cle);
+  let trouve = null, refus = null;
+  for (const nom of nomsDesCles(liste)) {
+    const hk = await Promise.all(clesDuNom(liste, nom).map(sha256Hex));
+    const r = cleRangeeLue(ranges, nom);
+    const estK = hk.some((x) => egaux(h, x)), estR = !!r && egaux(h, r.h);
+    const rangeeValable = !!r && memesEmpreintes(r.revoques, hk);
+    if (rangeeValable ? estR : estK) { if (!trouve) trouve = { nom: nom, par: rangeeValable ? 'rangee' : 'cles' }; }
+    else if (!refus && (estK || estR)) refus = estK ? { ok: false, remplacee: true } : { ok: false, perimee: true };
+  }
+  if (trouve) return { ok: true, nom: trouve.nom, par: trouve.par };
+  return refus || { ok: false };
 }

@@ -12,7 +12,9 @@
  *    position       'bas-droite' (défaut) ou 'bas-gauche'
  *    html2canvas    l'adresse de html2canvas si la page interdit cdnjs (CSP)
  *    visible        fonction : false pour cacher le bouton (ex. visiteurs non connectés)
- *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'koulam') ; sans réglage, d'après son adresse
+ *    sansAlerte     fonction (adresse complète) : true pour une requête dont la page affiche déjà l'échec elle-même (le pupitre et
+ *                   son Mac) ; elle reste dans la boîte noire, mais n'allume ni le point rouge ni la bulle
+ *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam') ; sans réglage, d'après son adresse
  *                   (Signaler.projetDeLaPage) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
  *                   770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam, sinon aucun
  *
@@ -29,7 +31,8 @@
  *  Chaque carte : l'état, le projet, l'abonnement Claude qui l'a prise (« via abonnement 1 »), le résumé, les captures avant / après
  *  (un toucher les montre en plein écran), et ce que le relais permet (champ « actions ») : « Annuler » une modification en ligne
  *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (exige une empreinte de moins de 5 minutes : sinon le bouton
- *  la redemande d'abord ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
+ *  la redemande d'abord ; posée sur un appareil de confiance : un appareil ajouté avec la clé d'équipe seule ne met pas en ligne, le
+ *  bouton le dit ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
  *  pas partie ou sans nouvelle depuis 15 minutes (et « Renvoyer sur l’autre abonnement »).
  *
  *  LA CONNEXION. Par EMPREINTE (WebAuthn, clés d'accès, rpId = le nom d'hôte de la page) : POST /auth/options/connexion puis
@@ -91,6 +94,8 @@
     origineEnvoi: 'Cette page n’est pas autorisée par le relais (son adresse n’est pas dans sa liste, ORIGINES) : l’envoi sera refusé.',
     pasReglee: 'La connexion par empreinte n’est pas encore réglée sur le relais : utilise ta clé d’équipe.',
     sessionPerdue: 'Ta connexion a expiré (ou cet appareil a été retiré) : reconnecte-toi avec ton empreinte.',
+    // 403 « confiance » du relais : l'appareil de la session a été ajouté avec la clé seule (une clé volée suffit pour cela).
+    confiance: 'Cet appareil a été ajouté avec la clé d’équipe seule : il ne peut pas mettre en ligne. Mets en ligne depuis ton téléphone, ou ici après « Se déconnecter » puis « Se connecter avec l’empreinte » en choisissant ton téléphone.',
     muet: 'Le relais ne répond pas : vérifie la connexion, puis réessaie.',
   };
 
@@ -259,7 +264,9 @@
       if (!/^https?:$/.test(u.protocol)) return;
       var cible = court(String(methode || 'GET').toUpperCase(), 10) + ' ' + court((u.origin === location.origin ? '' : u.host) + u.pathname, 150);
       consigner('requete', cible, statut ? 'statut ' + statut : 'pas de réponse (réseau)');
-      if (!statut || statut >= 500) alerter('requete:' + cible + ':' + statut, 'Une requête a échoué : ' + cible + (statut ? ' (erreur ' + statut + ')' : ' (pas de réponse du réseau)'));
+      var muet = false;
+      try { muet = typeof C.sansAlerte === 'function' && !!C.sansAlerte(u.href); } catch (e) {}
+      if (!muet && (!statut || statut >= 500)) alerter('requete:' + cible + ':' + statut, 'Une requête a échoué : ' + cible + (statut ? ' (erreur ' + statut + ')' : ' (pas de réponse du réseau)'));
     } catch (e) {}
   }
   if (fetchNatif) window.fetch = function (entree, init) {
@@ -299,7 +306,7 @@
   // ── LES PROJETS : les mêmes que le relais (PROJETS de relay/coeur.mjs), dans l'ordre du pupitre ────────────────────────────
   // KOULAM n'envoie rien par ce relais (sa propre bulle, sa propre routine) : il est là pour l'interrupteur et les anciennes demandes.
   var PROJETS = [{ id: 'home', nom: 'Home' }, { id: 'pupitre', nom: 'Pupitre' }, { id: 'havroutia', nom: 'HavroutIA' },
-    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'koulam', nom: 'KOULAM' }];
+    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'gescom', nom: 'GesCom' }, { id: 'koulam', nom: 'KOULAM' }];
   // Le projet d'une page d'après son adresse, la même règle que le relais (projetDeLaPage de relay/coeur.mjs) ; null : aucun.
   function projetDeLaPage(url) {
     var u; try { u = new URL(String(url || '')); } catch (e) { return null; }
@@ -309,6 +316,7 @@
       if (chemin.indexOf('/home/robots') === 0) return 'pupitre';
       if (chemin.indexOf('/home') === 0) return 'home';
       if (chemin.indexOf('/havroutia') === 0) return 'havroutia';
+      if (chemin.indexOf('/gescom') === 0) return 'gescom';
       return null;
     }
     if (hote === 'avinou-malkenou.web.app') return 'avinou';
@@ -1482,8 +1490,12 @@
       if (!fond) return;
       if (!r.ok) { el.disabled = false; dire(fond.querySelector('.sgn-etat'), r.msg, 'ko'); return; }
       EMP.offre = false;
-      rendre('Empreinte activée sur cet appareil : la prochaine fois, elle suffira.', 'ok');
-      if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre('Empreinte activée sur cet appareil : la prochaine fois, elle suffira.', 'ok'); });
+      // Ajouté avec la clé seule alors que la personne a déjà un appareil (« sur: false ») : il envoie, mais ne met pas en ligne.
+      var dit = r.appareil && r.appareil.sur === false
+        ? 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira pour envoyer. Il a été ajouté avec la clé d’équipe seule : pour mettre en ligne, l’empreinte de ton téléphone.'
+        : 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira.';
+      rendre(dit, 'ok');
+      if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(dit, 'ok'); });
     });
   }
 
@@ -1496,7 +1508,8 @@
     var a = String(x.abonnement || ''), autre = a === '1' ? '2' : a === '2' ? '1' : '';
     return autre && R.abonnements && R.abonnements.some(function (b) { return b.id === autre && b.regle; }) ? autre : '';
   }
-  // POST /demandes/<réf>/<quoi>. Rend [message, ton], ou { empreinte: true } (le relais veut une empreinte fraîche).
+  // POST /demandes/<réf>/<quoi>. Rend [message, ton], ou { empreinte: true } (le relais veut une empreinte fraîche). 403
+  // « confiance » : reposer le doigt sur CET appareil n'y changerait rien (il a été ajouté avec la clé seule), on le dit.
   function agir(quoi, id, el, corps, m) {
     el.disabled = true;
     if (m.enCours) el.textContent = m.enCours;
@@ -1504,6 +1517,7 @@
       if (j.demande && typeof j.demande === 'object' && D.liste) { var d = j.demande; D.liste = D.liste.map(function (x) { return x.id === d.id ? d : x; }); }
       if (j.ok && j.demande && typeof j.demande === 'object') return m.ok(j.demande);
       if (j.coupe) { couper(); return [COUPE_MSG, 'ko']; }
+      if (j.statut === 403 && j.confiance) return [MSG.confiance, 'ko'];
       if (j.statut === 403 && j.empreinte) return { empreinte: true };
       if (j.sessionPerdue) return [MSG.sessionPerdue, 'ko'];
       if (j.statut === 401 || j.cle) return ['', ''];   // la lecture qui suit le dira et redemandera la clé

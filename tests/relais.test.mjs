@@ -38,8 +38,9 @@ const signalement = (extra) => Object.assign({ type: 'bug', texte: 'Le bouton En
 const pieces = (objets) => [...objets.entries()].filter(([k]) => /^[0-9a-f]{32}$/.test(k));
 // Les interrupteurs par défaut : le général et chaque projet, activés, sans « depuis » ni « par ».
 const ACTIF = { actif: true, depuis: null, par: null };
-// Le mode par défaut de chaque projet (direct, sauf Avinou Malkenou : à valider, pour toujours).
-const MODES_DEFAUT = { home: 'direct', pupitre: 'direct', havroutia: 'direct', avinou: 'valider', koulam: 'direct' };
+// Le mode par défaut de chaque projet (direct, sauf Avinou Malkenou : à valider, pour toujours ; GesCom, absent de la liste des
+// modes par défaut du relais : à valider, comme une page d'aucun projet, tant que le pupitre ne l'a pas réglé).
+const MODES_DEFAUT = { home: 'direct', pupitre: 'direct', havroutia: 'direct', avinou: 'valider', gescom: 'valider', koulam: 'direct' };
 const avecMode = (id, x) => Object.assign({}, x, { mode: MODES_DEFAUT[id] });
 const tousActifs = () => Object.fromEntries(C.PROJETS.map((p) => [p.id, avecMode(p.id, ACTIF)]));
 const etatDefaut = (extra) => Object.assign({ ok: true }, ACTIF, { projets: tousActifs(), modes: Object.assign({}, MODES_DEFAUT) }, extra || {});
@@ -560,25 +561,26 @@ test('le journal du relais ne porte ni texte, ni clé, ni jeton', async () => {
 
 // Une page de chaque projet, telle que le bouton l'envoie dans contexte.url.
 const PAGES = { home: 'https://770lab.com/home/', pupitre: 'https://770lab.com/home/robots.html', havroutia: 'https://770lab.com/havroutia/',
-  avinou: 'https://avinou-malkenou.web.app/', koulam: 'https://koulam.app/' };
+  avinou: 'https://avinou-malkenou.web.app/', gescom: 'https://770lab.com/gescom/', koulam: 'https://koulam.app/' };
 const depuisLaPage = (url) => signalement({ contexte: { url: url, titre: 'Une page' } });
 const etatDe = async (env, projet, o) => (await appel(env, null, 'GET', '/etat' + (projet ? '?projet=' + encodeURIComponent(projet) : ''), Object.assign({ cle: null }, o || {}))).json();
 
 test('les projets : la liste fixe, et le projet d’une page d’après son adresse', () => {
   assert.deepEqual(C.PROJETS.map((p) => [p.id, p.nom]),
-    [['home', 'Home'], ['pupitre', 'Pupitre'], ['havroutia', 'HavroutIA'], ['avinou', 'Avinou Malkenou'], ['koulam', 'KOULAM']]);
+    [['home', 'Home'], ['pupitre', 'Pupitre'], ['havroutia', 'HavroutIA'], ['avinou', 'Avinou Malkenou'], ['gescom', 'GesCom'], ['koulam', 'KOULAM']]);
   assert.throws(() => { C.PROJETS.push({ id: 'x', nom: 'X' }); }, 'la liste ne se change pas en cours de route');
-  for (const id of ['home', 'pupitre', 'havroutia', 'avinou', 'koulam']) assert.equal(C.estProjet(id), true, id);
+  for (const id of ['home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam']) assert.equal(C.estProjet(id), true, id);
   for (const x of ['Home', 'KOULAM', '', 'tous', '__proto__', 'constructor', 'toString', null, undefined, 1, {}]) assert.equal(C.estProjet(x), false, String(x));
 
   const attendu = {
     'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots.html?demo=1#claude': 'pupitre', 'https://770lab.com/home/robots': 'pupitre',
     'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home', 'https://770lab.com/home/index.html?x=1': 'home', 'https://www.770lab.com/Home/': 'home',
     'https://770lab.com/havroutia/': 'havroutia', 'https://770lab.com/havroutia/index.html#etude': 'havroutia',
+    'https://770lab.com/gescom/': 'gescom', 'https://770lab.com/gescom/clients/42?x=1': 'gescom', 'https://www.770lab.com/GesCom/': 'gescom',
     'https://avinou-malkenou.web.app/': 'avinou', 'https://avinou-malkenou.web.app/carte/12': 'avinou',
     'https://koulam.app/': 'koulam', 'https://koulam.app/tefila/brachot/birkat_halevana': 'koulam', 'https://www.koulam.app/': 'koulam',
     'https://770lab.com/': null, 'https://770lab.com/studio/': null, 'https://770lab.com/robots/home': null,
-    'https://pirate.fr/home/robots.html': null, 'https://770lab.com.pirate.fr/home/': null, 'https://koulam.app.pirate.fr/': null,
+    'https://pirate.fr/home/robots.html': null, 'https://pirate.fr/gescom/': null, 'https://770lab.com/outils/gescom/': null, 'https://770lab.com.pirate.fr/home/': null, 'https://koulam.app.pirate.fr/': null,
     'https://pirate.fr/?u=https://koulam.app': null, 'https://chabapp-5fc3b.firebaseapp.com/studio': null, 'https://app.exemple.fr/clients/42': null,
     'javascript:alert(1)': null, 'pas une adresse': null, '': null,
   };
@@ -957,7 +959,8 @@ async function inscrire(env, A, o) {
   const opt = await rep.json();
   if (rep.status !== 200) return { opt: opt, rep: rep, j: opt };
   const cred = await A.creer(opt, origine, o.alterer);
-  const r2 = await appel(env, null, 'POST', '/auth/inscription', { origine: o.origineInscription || origine, cle: null, corps: cred });
+  const corps = o.nomInscription === undefined ? cred : Object.assign({}, cred, { nom: o.nomInscription });
+  const r2 = await appel(env, null, 'POST', '/auth/inscription', { origine: o.origineInscription || origine, cle: null, corps: corps });
   return { opt: opt, rep: r2, j: await r2.json(), cred: cred };
 }
 // Se connecter : options (sans clé), puis la signature de l'appareil. o : { origine, alterer, methode }.
@@ -992,7 +995,7 @@ for (const [alg, nom] of [[-7, 'ES256'], [-257, 'RS256']]) {
 
     assert.equal(ins.rep.status, 200, JSON.stringify(ins.j));
     assert.equal(ins.j.ok, true); assert.equal(ins.j.qui, 'marie');
-    assert.deepEqual(Object.keys(ins.j.appareil).sort(), ['creeLe', 'id', 'nom', 'rpId']);
+    assert.deepEqual(Object.keys(ins.j.appareil).sort(), ['creeLe', 'id', 'nom', 'rpId', 'sur']); assert.equal(ins.j.appareil.sur, true, 'le premier appareil de marie : de confiance');
     assert.deepEqual([ins.j.appareil.id, ins.j.appareil.nom, ins.j.appareil.rpId], [A.id, 'iPhone de marie', '770lab.com']);
     assert.ok(ins.j.exp >= avant + 12 * 3600 * 1000 && ins.j.exp <= Date.now() + 12 * 3600 * 1000, 'session de 12 h, en ms');
     const ap = appareilRange(env, A.id);
@@ -1023,7 +1026,7 @@ for (const [alg, nom] of [[-7, 'ES256'], [-257, 'RS256']]) {
     assert.deepEqual(liste.demandes.map((d) => d.id), [sig.ref]);
     const apps = await (await appel(env, null, 'GET', '/auth/appareils', { cle: null, entetes: bearer(s) })).json();
     assert.equal(apps.ok, true); assert.equal(apps.appareils.length, 1);
-    assert.deepEqual(Object.keys(apps.appareils[0]).sort(), ['actuel', 'creeLe', 'id', 'nom', 'rpId', 'vuLe']);
+    assert.deepEqual(Object.keys(apps.appareils[0]).sort(), ['actuel', 'creeLe', 'id', 'nom', 'rpId', 'sur', 'vuLe']);
     assert.equal(apps.appareils[0].actuel, true, 'cet appareil');
     assert.equal((await (await appel(env, null, 'GET', '/auth/appareils')).json()).appareils[0].actuel, false, 'avec la clé : aucun « actuel »');
     const ver = await (await appel(env, null, 'POST', '/auth/verifier', { origine: null, cle: null, corps: { session: s } })).json();
@@ -1158,7 +1161,8 @@ test('les routes /auth sans SESSION_SECRET (ou trop court) : 503 « pas encore r
   for (const secret of [undefined, '', 'trop-court']) {
     const env = envAuth({ SESSION_SECRET: secret }), R = routine();
     for (const [m, chemin] of [['POST', '/auth/options/inscription'], ['POST', '/auth/inscription'], ['POST', '/auth/options/connexion'], ['GET', '/auth/options/connexion'],
-      ['POST', '/auth/connexion'], ['GET', '/auth/appareils'], ['POST', '/auth/appareils/' + 'A'.repeat(43) + '/retirer'], ['POST', '/auth/verifier'], ['GET', '/auth/rien']]) {
+      ['POST', '/auth/connexion'], ['GET', '/auth/appareils'], ['POST', '/auth/appareils/' + 'A'.repeat(43) + '/retirer'], ['POST', '/auth/verifier'],
+      ['POST', '/auth/cle/nouvelle'], ['GET', '/auth/rien']]) {
       const rep = await appel(env, R, m, chemin, { origine: ORIGINE_770, corps: m === 'POST' ? {} : undefined });
       assert.equal(rep.status, 503, chemin); assert.equal(await rep.text(), '{"ok":false,"erreur":"connexion par empreinte pas encore réglée"}', chemin);
     }
@@ -1166,9 +1170,10 @@ test('les routes /auth sans SESSION_SECRET (ou trop court) : 503 « pas encore r
     assert.equal((await appel(env, R, 'GET', '/demandes', { cle: null, entetes: bearer(s) })).status, 401, 'sans secret, aucune session ne vaut');
     assert.equal((await appel(env, R, 'POST', '/signaler', { corps: signalement() })).status, 200, 'la clé, comme avant');
   }
-  // Sans stockage : 503 aussi (rien où ranger défis et appareils).
+  // Sans stockage : 503 aussi (rien où ranger défis, appareils et clés).
   const sans = Object.assign(env0(), { PIECES: undefined, SESSION_SECRET: SECRET });
   assert.equal((await appel(sans, null, 'POST', '/auth/options/connexion', { corps: {} })).status, 503);
+  assert.equal((await appel(sans, null, 'POST', '/auth/cle/nouvelle', { corps: {} })).status, 503);
 });
 
 test('POST /auth/verifier (pour l’API du Mac) : valide, expirée, falsifiée, illisible ; sans origine ; CORS pour une page permise', async () => {
@@ -1189,6 +1194,25 @@ test('POST /auth/verifier (pour l’API du Mac) : valide, expirée, falsifiée, 
   assert.equal(rep.headers.get('Access-Control-Allow-Origin'), null);
   const pre = await routeur(new Request(BASE + '/auth/verifier', { method: 'OPTIONS', headers: { Origin: ORIGINE_770 } }), env);
   assert.match(pre.headers.get('Access-Control-Allow-Headers'), /Authorization/);
+});
+
+test('le nom de l’appareil : corrigé à l’inscription (clé créée sur le téléphone ou une clé USB), sinon celui des options', async () => {
+  assert.equal(C.nomInscrit('Téléphone ou clé (inscrit depuis Mac · Chrome)', 'Mac · Chrome'), 'Téléphone ou clé (inscrit depuis Mac · Chrome)');
+  assert.equal(C.nomInscrit('  iMac \n du\tbureau  ', 'x'), 'iMac du bureau');
+  assert.equal(C.nomInscrit('a'.repeat(80), 'x'), 'a'.repeat(60));
+  assert.equal(C.nomInscrit('Mac\u0001\u0007 · Chrome', 'x'), 'Mac · Chrome');
+  for (const x of [undefined, null, '', '   ', '\u0001\u0002', 42, {}, ['Mac']]) assert.equal(C.nomInscrit(x, 'Mac · Chrome'), 'Mac · Chrome', JSON.stringify(x));
+  assert.equal(C.nomInscrit(undefined, ''), 'Appareil');
+  for (const [nomInscription, attendu] of [[undefined, 'iMac du bureau'], ['Téléphone ou clé (inscrit depuis iMac du bureau)', 'Téléphone ou clé (inscrit depuis iMac du bureau)'],
+    ['   ', 'iMac du bureau'], [{ pirate: 1 }, 'iMac du bureau']]) {
+    const env = envAuth(), A = await appareil(-7);
+    const ins = await inscrire(env, A, { nom: 'iMac du bureau', nomInscription: nomInscription });
+    assert.equal(ins.rep.status, 200, JSON.stringify(ins.j));
+    assert.equal(ins.j.appareil.nom, attendu, JSON.stringify(nomInscription));
+    assert.equal(appareilRange(env, A.id).nom, attendu);
+    const liste = await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.j.session) })).json();
+    assert.deepEqual(liste.appareils.map((a) => a.nom), [attendu]);
+  }
 });
 
 test('les appareils : 20 au plus par personne, liste triée, stockage qui ne sait pas effacer (pierre tombale)', async () => {
@@ -1495,6 +1519,339 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
   const sansPr = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
   await retourDe(env, { id: sansPr.ref, cle: jetonDe(R.appels[R.appels.length - 1].corps.text), etat: 'a_valider', liens: [] });
   assert.equal((await appel(env, R, 'POST', '/demandes/' + sansPr.ref + '/valider', { cle: null, entetes: bearer(c.j.session) })).status, 409);
+});
+
+// ——— Une nouvelle clé d'équipe depuis le pupitre (POST /auth/cle/nouvelle) ———
+
+test('les clés créées depuis le pupitre (pur) : 24 caractères base64url, seule l’empreinte rangée ; la plus récente seule valable (pupitre ou Terminal)', async () => {
+  const tirees = new Set(Array.from({ length: 200 }, () => C.nouvelleCle()));
+  assert.equal(tirees.size, 200, 'jamais deux fois la même');
+  for (const k of tirees) { assert.match(k, /^[A-Za-z0-9_-]{24}$/); assert.match(k, C.CLE_RX); }
+  assert.equal(C.cleCle('marie'), 'cle:marie');
+  const CLES = 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL, neuve = C.nouvelleCle(), app = 'A'.repeat(43);
+  const e = await C.nouvelleCleRangee({ cle: neuve, qui: 'marie', liste: CLES, quand: 1000, app: app });
+  assert.deepEqual(e, { h: await C.sha256Hex(neuve), creeLe: 1000, envRevoque: await C.sha256Hex(CLE_MARIE), app: app });
+  assert.ok(!JSON.stringify(e).includes(neuve) && !JSON.stringify(e).includes(CLE_MARIE), 'aucune clé en clair');
+  assert.equal((await C.nouvelleCleRangee({ cle: neuve, qui: 'zoe', liste: CLES, quand: 1, app: app })).envRevoque, null, 'pas de clé dans CLES : rien à remplacer');
+  const deux = 'marie:' + CLE_MARIE + ',marie:' + CLE_PAUL;
+  const e2 = await C.nouvelleCleRangee({ cle: neuve, qui: 'marie', liste: deux, quand: 1, app: app });
+  assert.deepEqual(e2.envRevoque, [await C.sha256Hex(CLE_MARIE), await C.sha256Hex(CLE_PAUL)], 'plusieurs clés de marie dans CLES : toutes');
+
+  const ranges = { marie: e };
+  assert.deepEqual(await C.deciderCle(neuve, CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(' ' + neuve + ' ', CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' }, 'espaces autour : comme verifierCle');
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, ranges), { ok: false, remplacee: true }, 'l’ancienne ne marche plus');
+  assert.deepEqual(await C.deciderCle(CLE_PAUL, CLES, ranges), { ok: true, nom: 'paul', par: 'cles' }, 'les autres : inchangés');
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, {}), { ok: true, nom: 'marie', par: 'cles' }, 'rien de rangé : CLES, comme avant');
+  for (const k of [CLE_MARIE, CLE_PAUL]) assert.equal((await C.deciderCle(k, deux, { marie: e2 })).ok, false, 'toutes ses clés de CLES sont remplacées');
+  // CLES changé au Terminal APRÈS la création au pupitre (une autre clé pour marie) : la plus récente, celle de CLES, est la seule
+  // valable ; la clé du pupitre est périmée. Paul n'est pas touché.
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m', CLES2 = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+  assert.deepEqual(await C.deciderCle(AUTRE, CLES2, ranges), { ok: true, nom: 'marie', par: 'cles' });
+  assert.deepEqual(await C.deciderCle(neuve, CLES2, ranges), { ok: false, perimee: true }, 'la clé du pupitre, plus ancienne que CLES : refusée');
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES2, ranges), { ok: false }, 'plus dans CLES');
+  assert.deepEqual(await C.deciderCle(CLE_PAUL, CLES2, ranges), { ok: true, nom: 'paul', par: 'cles' });
+  // … puis une nouvelle clé au pupitre (elle remplace AUTRE) : elle redevient la seule valable.
+  const neuve2 = C.nouvelleCle(), e3 = await C.nouvelleCleRangee({ cle: neuve2, qui: 'marie', liste: CLES2, quand: 2000, app: app });
+  assert.equal(e3.envRevoque, await C.sha256Hex(AUTRE));
+  assert.deepEqual(await C.deciderCle(neuve2, CLES2, { marie: e3 }), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(AUTRE, CLES2, { marie: e3 }), { ok: false, remplacee: true });
+  assert.equal((await C.deciderCle(neuve, CLES2, { marie: e3 })).ok, false, 'la 1re du pupitre : toujours refusée');
+  // CLES remis à sa valeur du moment de la création : rien n'a changé depuis pour ce nom, la clé rangée vaut de nouveau, seule.
+  assert.deepEqual(await C.deciderCle(neuve, CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  // Plusieurs clés de marie dans CLES : une seule retirée au Terminal = CLES a changé, ses clés restantes valent, pas la rangée.
+  const une = 'marie:' + CLE_MARIE;
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, une, { marie: e2 }), { ok: true, nom: 'marie', par: 'cles' });
+  assert.deepEqual(await C.deciderCle(neuve, une, { marie: e2 }), { ok: false, perimee: true });
+  assert.deepEqual(await C.deciderCle(neuve, 'marie:' + CLE_PAUL + ',marie:' + CLE_MARIE, { marie: e2 }), { ok: true, nom: 'marie', par: 'rangee' }, 'même ensemble, autre ordre : inchangé');
+  // Retirée de CLES : sa clé rangée ne vaut plus rien (elle n'est même pas lue).
+  assert.deepEqual(await C.deciderCle(neuve, 'paul:' + CLE_PAUL, ranges), { ok: false });
+  // Un enregistrement illisible ou une pierre tombale : comme absent.
+  for (const x of [null, { retire: true }, { h: 'pas-une-empreinte', envRevoque: e.envRevoque }, 'texte', 42, []])
+    assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, { marie: x }), { ok: true, nom: 'marie', par: 'cles' }, JSON.stringify(x));
+  // Une empreinte de l'ancienne illisible : on ne peut pas dire que CLES n'a pas bougé, c'est CLES qui vaut (le secours du Terminal).
+  for (const r of [null, 'pas-une-empreinte', [], 42]) {
+    const x = Object.assign({}, e, { envRevoque: r });
+    assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, { marie: x }), { ok: true, nom: 'marie', par: 'cles' }, JSON.stringify(r));
+    assert.deepEqual(await C.deciderCle(neuve, CLES, { marie: x }), { ok: false, perimee: true }, JSON.stringify(r));
+  }
+  assert.equal((await C.deciderCle(neuve, CLES, Object.create(ranges))).ok, false, 'seules les entrées propres sont lues');
+  // Trop courte, vide : refusée.
+  for (const k of ['', null, undefined, 'court', neuve.slice(0, 15)]) assert.deepEqual(await C.deciderCle(k, CLES, ranges), { ok: false }, String(k));
+});
+
+test('POST /auth/cle/nouvelle : empreinte de moins de 5 minutes exigée (la clé seule ne suffit pas), page permise ; un refus ne range rien', async () => {
+  const env = envAuth(), A = await appareil(-7);
+  const { j: ins } = await inscrire(env, A);
+  const chemin = '/auth/cle/nouvelle';
+  const nouvelle = (o) => appel(env, null, 'POST', chemin, Object.assign({ origine: ORIGINE_770, cle: null, corps: {} }, o || {}));
+  // La clé d'équipe seule, même la bonne : 403 « empreinte » (une clé volée n'en crée pas une autre).
+  let rep = await nouvelle({ cle: CLE_MARIE });
+  assert.equal(rep.status, 403); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE_770);
+  assert.deepEqual(await rep.json(), { ok: false, empreinte: true, erreur: 'Une nouvelle clé se crée seulement avec ton empreinte.' });
+  // Une session refusée (expirée, falsifiée, d'un appareil inconnu, illisible) : 401, comme partout (la page l'oublie).
+  const expiree = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 13 * 3600 * 1000 }), SECRET);
+  const inconnu = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: 'B'.repeat(43), rp: '770lab.com', quand: Date.now() }), SECRET);
+  for (const s of [expiree, ins.session + 'x', inconnu, 'illisible']) {
+    rep = await nouvelle({ cle: CLE_MARIE, entetes: bearer(s) });
+    assert.equal(rep.status, 401, s.slice(0, 12));
+    assert.deepEqual(await rep.json(), { ok: false, cle: true, session: true, erreur: 'connexion expirée ou appareil retiré : reconnecte-toi avec ton empreinte' });
+  }
+  // Une session valable dont l'empreinte date de plus de 5 minutes : 403 « empreinte » (pas 401 : la page garde sa session).
+  const vieille = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now(), uv: Date.now() - 6 * 60 * 1000 }), SECRET);
+  rep = await nouvelle({ entetes: bearer(vieille) });
+  assert.equal(rep.status, 403);
+  assert.deepEqual(await rep.json(), { ok: false, empreinte: true, erreur: 'Ton empreinte date de plus de 5 minutes : pose de nouveau le doigt.' });
+  // Une autre page, ou sans origine : 403, sans CORS, même avec une empreinte fraîche.
+  for (const origine of ['https://pirate.fr', null]) {
+    rep = await nouvelle({ origine: origine, entetes: bearer(ins.session) });
+    assert.equal(rep.status, 403, String(origine)); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), null);
+    assert.equal((await rep.json()).erreur, 'page non autorisée');
+  }
+  // Un corps qui n'est pas un objet : 400 ; trop lourd : 413.
+  assert.equal((await nouvelle({ entetes: bearer(ins.session), corps: '[1]' })).status, 400);
+  assert.equal((await nouvelle({ entetes: bearer(ins.session), corps: { x: 'y'.repeat(2000) } })).status, 413);
+  assert.equal([...env.PIECES_KV.objets.keys()].some((k) => k.startsWith('cle:')), false, 'aucun refus ne range rien');
+  assert.equal((await appel(env, null, 'GET', '/demandes')).status, 200, 'la clé de CLES marche toujours');
+  // Le préliminaire CORS de la page.
+  const pre = await routeur(new Request(BASE + chemin, { method: 'OPTIONS', headers: { Origin: ORIGINE_770 } }), env);
+  assert.equal(pre.headers.get('Access-Control-Allow-Origin'), ORIGINE_770); assert.match(pre.headers.get('Access-Control-Allow-Headers'), /Authorization/);
+});
+
+test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout ; une 2e remplace la 1re ; CLES changé au Terminal reprend la main (seul) ; jamais en clair', async () => {
+  const env = envAuth(), R = routine(), A = await appareil(-7), journal = [], log = console.log;
+  const { j: ins } = await inscrire(env, A);
+  const creer = async () => {
+    const rep = await appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.session) });
+    return { rep: rep, j: await rep.json() };
+  };
+  const statut = async (cle) => (await appel(env, R, 'GET', '/demandes', { cle: cle })).status;
+  const sha = C.sha256Hex;
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
+  let un, deux, trois;
+  console.log = (...x) => journal.push(x.join(' '));
+  try {
+    // Créée (corps vide permis) : rendue une fois, no-store ; seule son empreinte est rangée, sans fin, avec celle de l'ancienne.
+    un = await creer();
+    assert.equal(un.rep.status, 200, JSON.stringify(un.j));
+    assert.equal(un.rep.headers.get('Cache-Control'), 'no-store'); assert.equal(un.rep.headers.get('Access-Control-Allow-Origin'), ORIGINE_770);
+    assert.deepEqual(Object.keys(un.j).sort(), ['cle', 'creeLe', 'ok', 'qui']);
+    assert.equal(un.j.ok, true); assert.equal(un.j.qui, 'marie'); assert.match(un.j.cle, /^[A-Za-z0-9_-]{24}$/);
+    assert.ok(Math.abs(un.j.creeLe - Date.now()) < 5000);
+    const range = env.PIECES_KV.objets.get('cle:marie');
+    assert.deepEqual(JSON.parse(range.v), { h: await sha(un.j.cle), creeLe: un.j.creeLe, envRevoque: await sha(CLE_MARIE), app: A.id });
+    assert.equal(range.o, undefined, 'une clé ne s’efface pas d’elle-même');
+
+    // L'ancienne (celle de CLES) ne marche plus ; la nouvelle marche partout, sous le bon nom ; paul et la session : inchangés.
+    let rep = await appel(env, R, 'GET', '/demandes', { cle: CLE_MARIE });
+    assert.equal(rep.status, 401); assert.deepEqual(await rep.json(), { ok: false, cle: true, erreur: 'clé d’équipe absente ou inconnue' });
+    assert.equal(await statut(un.j.cle), 200);
+    const sig = await (await appel(env, R, 'POST', '/signaler', { cle: un.j.cle, corps: signalement() })).json();
+    assert.equal(sig.ok, true); assert.ok(R.appels[0].corps.text.includes('Signalé par : marie'), 'le nom vient de la clé rangée');
+    assert.equal((await appel(env, R, 'POST', '/signaler', { cle: CLE_MARIE, corps: signalement() })).status, 401);
+    assert.equal(R.appels.length, 1, 'l’ancienne clé ne déclenche plus la routine');
+    const coupe = await (await appel(env, null, 'POST', '/etat', { origine: null, cle: un.j.cle, corps: { actif: false } })).json();
+    assert.deepEqual([coupe.actif, coupe.par], [false, 'marie'], 'POST /etat (sans origine) : la nouvelle clé, sous le nom de marie');
+    await appel(env, null, 'POST', '/etat', { origine: null, cle: un.j.cle, corps: { actif: true } });
+    assert.equal((await appel(env, null, 'GET', '/routine', { origine: null, cle: un.j.cle })).status, 200);
+    assert.equal((await appel(env, null, 'GET', '/routine', { origine: null, cle: CLE_MARIE })).status, 401);
+    assert.equal(await statut(CLE_PAUL), 200, 'paul : sa clé de CLES, comme avant');
+    assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(ins.session) })).status, 200, 'la session de marie vaut toujours');
+    // Brancher un appareil avec la nouvelle clé (l'empreinte d'un autre téléphone) : marie.
+    const B = await appareil(-7);
+    const insB = await inscrire(env, B, { cle: un.j.cle });
+    assert.equal(insB.rep.status, 200, JSON.stringify(insB.j)); assert.equal(insB.j.qui, 'marie');
+    assert.equal((await inscrire(env, await appareil(-7), { cle: CLE_MARIE })).rep.status, 401, 'l’ancienne n’inscrit plus rien');
+
+    // Une 2e création remplace la 1re (refusée à son tour) ; l'ancienne de CLES reste refusée.
+    deux = await creer();
+    assert.equal(deux.rep.status, 200); assert.notEqual(deux.j.cle, un.j.cle);
+    assert.equal(await statut(un.j.cle), 401); assert.equal(await statut(deux.j.cle), 200); assert.equal(await statut(CLE_MARIE), 401);
+    assert.equal(JSON.parse(env.PIECES_KV.objets.get('cle:marie').v).envRevoque, await sha(CLE_MARIE));
+
+    // Le propriétaire change CLES au Terminal (une autre clé pour marie, la clé du pupitre a fui) : la plus récente, celle de CLES,
+    // est la seule valable, sous son nom ; la clé du pupitre ne marche plus nulle part.
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(AUTRE), 200);
+    assert.deepEqual((await (await appel(env, null, 'GET', '/demandes', { cle: AUTRE })).json()).demandes.map((d) => d.id), [sig.ref]);
+    assert.equal(await statut(CLE_MARIE), 401); assert.equal(await statut(deux.j.cle), 401, 'la clé du pupitre, plus ancienne que CLES : refusée');
+    assert.equal((await appel(env, R, 'POST', '/signaler', { cle: deux.j.cle, corps: signalement() })).status, 401);
+    assert.equal((await appel(env, null, 'POST', '/etat', { origine: null, cle: deux.j.cle, corps: { actif: false } })).status, 401);
+    assert.equal((await inscrire(env, await appareil(-7), { cle: deux.j.cle })).rep.status, 401, 'elle n’inscrit plus rien');
+    assert.equal(await statut(CLE_PAUL), 200, 'paul : inchangé');
+    // … puis une nouvelle clé au pupitre : elle redevient la seule valable (AUTRE refusée à son tour).
+    trois = await creer();
+    assert.equal(trois.rep.status, 200);
+    assert.equal(await statut(trois.j.cle), 200); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(deux.j.cle), 401);
+    assert.equal(JSON.parse(env.PIECES_KV.objets.get('cle:marie').v).envRevoque, await sha(AUTRE));
+    // Revenir à une valeur plus ancienne de CLES (CLE_MARIE) : CLES a changé depuis la dernière création, c'est elle qui vaut.
+    env.CLES = 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(CLE_MARIE), 200); assert.equal(await statut(trois.j.cle), 401);
+    // CLES remis à la valeur du moment de la création (AUTRE) : rien n'a changé depuis pour marie, la clé du pupitre vaut, seule.
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(trois.j.cle), 200); assert.equal(await statut(AUTRE), 401);
+    // Marie retirée de CLES : sa clé rangée ne vaut plus rien, sa session non plus.
+    env.CLES = 'paul:' + CLE_PAUL;
+    assert.equal(await statut(trois.j.cle), 401); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(CLE_PAUL), 200);
+    assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(ins.session) })).status, 401);
+    // Remise dans CLES sous le même nom et la même clé qu'à la création : sa clé du pupitre revient avec elle (INSTALL.md le dit).
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(trois.j.cle), 200);
+    // Remise dans CLES sous le même nom avec une AUTRE clé : CLES a changé depuis, c'est elle qui vaut, pas la clé du pupitre.
+    const NEUF = 'Qw7rT2yU9iO4pA1s';
+    env.CLES = 'marie:' + NEUF + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(NEUF), 200); assert.equal(await statut(trois.j.cle), 401);
+  } finally { console.log = log; }
+
+  // Le journal : une ligne « [cle] » par création, avec le nom seulement ; ni les clés ni leurs empreintes.
+  assert.deepEqual(journal.filter((l) => l.startsWith('[cle]')), ['[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}']);
+  const tout = journal.join('\n');
+  for (const secret of [un.j.cle, deux.j.cle, trois.j.cle, await sha(un.j.cle), await sha(deux.j.cle), await sha(trois.j.cle), CLE_MARIE, AUTRE, CLE_PAUL, 'Qw7rT2yU9iO4pA1s'])
+    assert.ok(!tout.includes(secret), secret);
+  // Le stockage : aucune clé en clair, nulle part (ni sous « cle: », ni dans une demande, un appareil…).
+  const texte = (v) => (typeof v === 'string' ? v : Buffer.from(v instanceof ArrayBuffer ? new Uint8Array(v) : v).toString('latin1'));
+  for (const [k, x] of env.PIECES_KV.objets) for (const cle of [un.j.cle, deux.j.cle, trois.j.cle]) assert.ok(!texte(x.v).includes(cle) && !k.includes(cle), k);
+});
+
+test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CLES seule, comme avant', async () => {
+  const env = Object.assign(env0(), { ORIGINES: ORIGINE_770, SESSION_SECRET: SECRET }), A = await appareil(-7);
+  const { j: ins } = await inscrire(env, A);
+  const j = await (await appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.session), corps: {} })).json();
+  assert.equal(j.ok, true, JSON.stringify(j));
+  assert.equal(env.PIECES.objets.get('cle:marie').o.customMetadata.genre, 'cle', 'étiquetée comme le reste');
+  assert.equal((await appel(env, null, 'GET', '/demandes', { origine: ORIGINE_770, cle: CLE_MARIE })).status, 401);
+  assert.equal((await appel(env, null, 'GET', '/demandes', { origine: ORIGINE_770, cle: j.cle })).status, 200);
+  const sans = Object.assign(env0(), { PIECES: undefined }), R = routine();
+  assert.equal((await appel(sans, R, 'POST', '/signaler', { corps: signalement() })).status, 200, 'sans stockage : CLES, comme avant');
+  assert.equal((await appel(sans, R, 'POST', '/signaler', { cle: j.cle, corps: signalement() })).status, 401);
+});
+
+// ——— Les appareils de confiance : une clé d'équipe volée inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne ———
+
+const PAS_DE_CONFIANCE_CLE = { ok: false, confiance: true, erreur: 'Cet appareil a été ajouté avec la clé d’équipe seule : une nouvelle clé se crée avec l’empreinte d’un appareil de confiance (ton téléphone).' };
+const PAS_DE_CONFIANCE_VALIDER = { ok: false, confiance: true, erreur: 'cet appareil a été ajouté avec la clé d’équipe seule : mets en ligne avec l’empreinte d’un appareil de confiance (ton téléphone)' };
+
+test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne crée pas de clé et ne met pas en ligne, même après un changement de CLES au Terminal', async () => {
+  const env = envAuth(), R = routine(), A = await appareil(-7), X = await appareil(-7);
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
+  const nouvelle = (s) => appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(s), corps: {} });
+  const statut = async (cle) => (await appel(env, R, 'GET', '/demandes', { cle: cle })).status;
+  // Le propriétaire (marie) inscrit son téléphone : le PREMIER appareil de marie, de confiance.
+  const a = await inscrire(env, A, { nom: 'Téléphone de marie' });
+  assert.equal(a.rep.status, 200, JSON.stringify(a.j)); assert.equal(a.j.appareil.sur, true); assert.equal(appareilRange(env, A.id).sur, true);
+  // Une demande à valider (avec sa PR), pour plus bas.
+  await appel(env, null, 'POST', '/etat', { corps: { projet: 'home', mode: 'valider' } });
+  const dem = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
+  await retourDe(env, { id: dem.ref, cle: jetonDe(R.appels[0].corps.text), etat: 'a_valider', liens: ['https://github.com/770lab/home/pull/12'] });
+  const valider = (s) => appel(env, R, 'POST', '/demandes/' + dem.ref + '/valider', { cle: null, entetes: bearer(s) });
+
+  // L'intrus a la clé de marie (volée) : il inscrit SON appareil avec la clé seule. Inscrit, connecté sous le nom de marie, avec une
+  // empreinte fraîche… mais pas de confiance : marie avait déjà un appareil.
+  const x = await inscrire(env, X, { cle: CLE_MARIE, nom: 'Inconnu' });
+  assert.equal(x.rep.status, 200, JSON.stringify(x.j)); assert.equal(x.j.qui, 'marie');
+  assert.equal(x.j.appareil.sur, false); assert.equal(appareilRange(env, X.id).sur, false);
+  assert.equal(C.sessionFraiche((await C.lireSession(x.j.session, SECRET, Date.now())).p, Date.now()), true, 'une empreinte aussi fraîche que celle du propriétaire');
+  // Une nouvelle clé : refusée (403 « confiance », pas « empreinte » : reposer le doigt sur CET appareil n'y changerait rien).
+  let rep = await nouvelle(x.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_CLE);
+  const cx = await connecter(env, X);
+  assert.equal(cx.rep.status, 200, 'il se reconnecte avec son empreinte');
+  rep = await nouvelle(cx.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_CLE);
+  assert.equal(env.PIECES_KV.objets.has('cle:marie'), false, 'rien de rangé');
+  assert.equal(await statut(CLE_MARIE), 200, 'la clé du propriétaire marche toujours');
+  // Mettre en ligne : refusé aussi, sans appeler la routine ; ce qui ne demande pas de confiance marche comme avant.
+  rep = await valider(cx.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_VALIDER);
+  assert.equal(R.appels.length, 1); assert.equal(lireDemande(env, dem.ref).etat, 'a_valider');
+  assert.equal((await appel(env, R, 'GET', '/demandes', { cle: null, entetes: bearer(cx.j.session) })).status, 200);
+  // Un appareil ajouté avec la session d'un appareil PAS de confiance : pas de confiance non plus.
+  const Y = await appareil(-7);
+  const y = await inscrire(env, Y, { session: cx.j.session });
+  assert.equal(y.rep.status, 200); assert.equal(y.j.appareil.sur, false);
+  assert.equal((await nouvelle(y.j.session)).status, 403);
+  // « Mes appareils » montre lesquels le sont (le propriétaire y repère l'inconnu) ; /auth/verifier le dit aussi (l'API du Mac).
+  const liste = (await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(a.j.session) })).json()).appareils;
+  assert.deepEqual(Object.fromEntries(liste.map((ap) => [ap.id, ap.sur])), { [A.id]: true, [X.id]: false, [Y.id]: false });
+  const ver = async (s) => (await appel(env, null, 'POST', '/auth/verifier', { origine: null, cle: null, corps: { session: s } })).json();
+  assert.deepEqual([(await ver(cx.j.session)).valide, (await ver(cx.j.session)).sur], [true, false]);
+  assert.deepEqual([(await ver(a.j.session)).valide, (await ver(a.j.session)).sur], [true, true]);
+
+  // Le propriétaire change CLES au Terminal. L'intrus, toujours inscrit sous marie (marie est toujours dans CLES), se reconnecte :
+  // il ne reprend pas la main (avant, il recréait une clé qui l'emportait de nouveau sur celle du Terminal).
+  env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+  const cx2 = await connecter(env, X);
+  assert.equal(cx2.rep.status, 200, 'toujours inscrit tant qu’on ne le retire pas');
+  assert.equal((await nouvelle(cx2.j.session)).status, 403);
+  assert.equal(await statut(AUTRE), 200, 'la clé du Terminal reste la seule valable'); assert.equal(await statut(CLE_MARIE), 401);
+  assert.equal((await valider(cx2.j.session)).status, 403);
+  // Le propriétaire, avec l'empreinte de son téléphone : sa nouvelle clé, et la mise en ligne.
+  const ca = await connecter(env, A);
+  rep = await nouvelle(ca.j.session);
+  const neuve = await rep.json();
+  assert.equal(rep.status, 200, JSON.stringify(neuve)); assert.equal(await statut(neuve.cle), 200); assert.equal(await statut(AUTRE), 401);
+  rep = await valider(ca.j.session);
+  assert.equal(rep.status, 200, JSON.stringify(await rep.clone().json())); assert.equal(R.appels.length, 2);
+  // Il retire les appareils inconnus (la marche à suivre après une fuite) : leurs sessions ne valent plus rien, tout de suite.
+  for (const id of [X.id, Y.id]) assert.equal((await appel(env, null, 'POST', '/auth/appareils/' + id + '/retirer', { origine: ORIGINE_770, cle: null, entetes: bearer(ca.j.session), corps: {} })).status, 200);
+  assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(cx2.j.session) })).status, 401);
+  assert.equal((await connecter(env, X)).rep.status, 401);
+  // Un appareil ajouté AVEC la session d'un appareil de confiance : de confiance (il crée une clé à son tour).
+  const B = await appareil(-7);
+  const b = await inscrire(env, B, { session: ca.j.session, nom: 'iMac du bureau' });
+  assert.equal(b.rep.status, 200, JSON.stringify(b.j)); assert.equal(b.j.appareil.sur, true);
+  assert.equal((await nouvelle(b.j.session)).status, 200);
+});
+
+test('les appareils de confiance : le premier d’une personne (même après un essai abandonné), ceux d’avant ce changement ; tout retirer ne rouvre pas la porte', async () => {
+  // Pur : de confiance avec la session d'un appareil de confiance (un ancien, sans le champ, l'est), ou avec la clé seule pour qui
+  // n'a jamais eu d'appareil ; sinon non.
+  assert.equal(C.inscriptionDeConfiance({ appareil: { sur: true }, jamaisInscrit: false }), true);
+  assert.equal(C.inscriptionDeConfiance({ appareil: { id: 'x' }, jamaisInscrit: false }), true, 'un ancien appareil (sans le champ) : de confiance');
+  assert.equal(C.inscriptionDeConfiance({ appareil: { sur: false }, jamaisInscrit: true }), false, 'la session d’un appareil pas de confiance ne donne rien');
+  assert.equal(C.inscriptionDeConfiance({ appareil: null, jamaisInscrit: true }), true);
+  for (const o of [{ appareil: null, jamaisInscrit: false }, {}, null, undefined]) assert.equal(C.inscriptionDeConfiance(o), false, JSON.stringify(o));
+  for (const [ap, attendu] of [[{ sur: true }, true], [{}, true], [{ sur: false }, false], [null, false], [undefined, false]]) assert.equal(C.appareilDeConfiance(ap), attendu, JSON.stringify(ap));
+
+  const env = envAuth();
+  const nouvelle = (s) => appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(s), corps: {} });
+  // paul n'a jamais eu d'appareil : des options demandées puis abandonnées (rien d'inscrit), son premier appareil reste de confiance.
+  assert.equal((await appel(env, null, 'POST', '/auth/options/inscription', { origine: ORIGINE_770, cle: CLE_PAUL, corps: {} })).status, 200);
+  assert.equal(env.PIECES_KV.objets.has('appareils:paul'), false);
+  const P1 = await appareil(-7), P2 = await appareil(-7), P3 = await appareil(-7);
+  const p1 = await inscrire(env, P1, { cle: CLE_PAUL });
+  assert.equal(p1.rep.status, 200); assert.equal(p1.j.qui, 'paul'); assert.equal(p1.j.appareil.sur, true);
+  const rp = await nouvelle(p1.j.session), clePaul = (await rp.json()).cle;
+  assert.equal(rp.status, 200, 'son premier appareil crée une clé');
+  // Son 2e avec la clé seule : pas de confiance.
+  const p2 = await inscrire(env, P2, { cle: clePaul });
+  assert.equal(p2.rep.status, 200); assert.equal(p2.j.appareil.sur, false);
+  // Tout retirer (la clé suffit à retirer), puis inscrire avec la clé : toujours pas de confiance (la liste « appareils:paul »
+  // existe, vide : la porte du premier appareil ne se rouvre pas pour une clé volée).
+  for (const id of [P1.id, P2.id]) assert.equal((await appel(env, null, 'POST', '/auth/appareils/' + id + '/retirer', { origine: ORIGINE_770, cle: clePaul, corps: {} })).status, 200);
+  assert.deepEqual(JSON.parse(env.PIECES_KV.objets.get('appareils:paul').v), []);
+  const p3 = await inscrire(env, P3, { cle: clePaul });
+  assert.equal(p3.rep.status, 200); assert.equal(p3.j.appareil.sur, false);
+  assert.equal((await nouvelle(p3.j.session)).status, 403);
+
+  // Un appareil rangé AVANT ce changement (sans le champ « sur ») : de confiance, rien ne change pour lui.
+  const L = await appareil(-7);
+  assert.equal((await inscrire(env, L)).rep.status, 200);
+  const ancien = appareilRange(env, L.id); delete ancien.sur;
+  await env.PIECES_KV.put('appareil:' + L.id, JSON.stringify(ancien));
+  const cl = await connecter(env, L);
+  assert.equal(cl.rep.status, 200);
+  assert.equal((await nouvelle(cl.j.session)).status, 200);
+  const liste = (await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(cl.j.session) })).json()).appareils;
+  assert.deepEqual(liste.map((ap) => ap.sur), [true]);
+  // Un défi d'avant ce changement (sans « sur ») : l'appareil n'est pas de confiance (dans le doute, non).
+  const env2 = envAuth(), M = await appareil(-7);
+  const opt = await (await appel(env2, null, 'POST', '/auth/options/inscription', { origine: ORIGINE_770, corps: {} })).json();
+  const k = 'defi:' + opt.challenge, d = JSON.parse(env2.PIECES_KV.objets.get(k).v); delete d.sur;
+  await env2.PIECES_KV.put(k, JSON.stringify(d));
+  const cred = await M.creer(opt, ORIGINE_770);
+  const r = await (await appel(env2, null, 'POST', '/auth/inscription', { origine: ORIGINE_770, cle: null, corps: cred })).json();
+  assert.equal(r.ok, true); assert.equal(r.appareil.sur, false);
 });
 
 // ——— Deux abonnements Claude ———

@@ -57,7 +57,7 @@
     document.getElementById('mes-demandes').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes('toutes'); });
     document.getElementById('demandes-projet').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes({ projet: 'home' }); });
     // Démo : adresse du relais passée dans l'URL (?relais=http://localhost:8787), sinon le relais local de développement ;
-    // ?projet=home (ou pupitre, havroutia, avinou) : le projet de la page, sinon d'après son adresse (ici, aucun).
+    // ?projet=home (ou pupitre, havroutia, avinou, gescom) : le projet de la page, sinon d'après son adresse (ici, aucun).
     // L'empreinte (WebAuthn) ne marche qu'en https ou sur http://localhost : ouvrir la démo par localhost, pas par 127.0.0.1.
     var q = new URLSearchParams(location.search);
     window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };

@@ -82,12 +82,12 @@ const fausseRoutine = async (url, init) => { appels.push(JSON.parse(init.body));
 //   POST /signaler d'une page d'un projet coupé : « coupé » (le projet d'après contexte.url, comme le relais).
 // faux.etatVieux : relais d'avant les projets (il ne lit pas ?projet=, ne dit ni « projets » ni « effectif »)
 // faux.requetesEtat : le projet demandé à chaque GET /etat (null : sans ?projet=)
-const PROJETS = ['home', 'pupitre', 'havroutia', 'avinou', 'koulam'];
+const PROJETS = ['home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam'];
 // La règle du contrat (une copie ici : le test ne lit pas le code du bouton pour vérifier le bouton).
 function projetDeLaPage(url) {
   let u; try { u = new URL(String(url || '')); } catch (e) { return null; }
   const hote = u.hostname.toLowerCase().replace(/^www\./, ''), c = u.pathname.toLowerCase();
-  if (hote === '770lab.com') return c.startsWith('/home/robots') ? 'pupitre' : c.startsWith('/home') ? 'home' : c.startsWith('/havroutia') ? 'havroutia' : null;
+  if (hote === '770lab.com') return c.startsWith('/home/robots') ? 'pupitre' : c.startsWith('/home') ? 'home' : c.startsWith('/havroutia') ? 'havroutia' : c.startsWith('/gescom') ? 'gescom' : null;
   return hote === 'avinou-malkenou.web.app' ? 'avinou' : hote === 'koulam.app' ? 'koulam' : null;
 }
 const T0 = Date.now();
@@ -465,6 +465,22 @@ try {
   await e.p.evaluate(() => { window.__ouvert = true; window.Signaler.montrer(); });
   ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)) && faux.appelsEtat > lusEtat, 'puis Signaler.montrer() (déverrouillage, connexion) : le relais est interrogé et le rond paraît');
   await e.ctx.close();
+  // SignalerConfig.sansAlerte : une requête que la page affiche déjà elle-même (le pupitre et son Mac) reste dans la boîte noire,
+  // sans point rouge ni bulle ; une autre requête en échec allume toujours la bulle.
+  e = await page({ width: 390, height: 844 }, { cle: CLE, init: () => {
+    let v; Object.defineProperty(window, 'SignalerConfig', { configurable: true, get: () => v, set: (x) => { v = Object.assign({}, x, { sansAlerte: (u) => u.indexOf('127.0.0.1:9/') >= 0 }); } });
+  } });
+  await e.p.waitForSelector('.sgn-fab', { timeout: 5000 });
+  await e.p.evaluate(() => fetch('http://127.0.0.1:9/mac/robots').catch(() => null));
+  await e.p.waitForTimeout(600);
+  const muette = await e.p.evaluate(() => ({ bulle: !!document.querySelector('.sgn-bulle:not([hidden])') && getComputedStyle(document.querySelector('.sgn-bulle')).display !== 'none',
+    rouge: document.querySelector('.sgn-fab').classList.contains('sgn-alerte'), journal: JSON.stringify(window.Signaler._journal()) }));
+  await e.p.evaluate(() => fetch('http://127.0.0.1:1/autre').catch(() => null));
+  const parle = await e.p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 }).then(() => true, () => false);
+  ok(!muette.bulle && !muette.rouge && /127\.0\.0\.1:9\/mac\/robots/.test(muette.journal) && parle,
+    'SignalerConfig.sansAlerte : la requête du Mac en échec reste dans la boîte noire sans bulle ni point rouge ; une autre allume la bulle'
+    + (muette.bulle || muette.rouge ? ' (alerte allumée pour la requête muette)' : '') + (parle ? '' : ' (pas de bulle pour l’autre)'));
+  await e.ctx.close();
   for (const [mode, dit] of [['on', 'allumé'], ['erreur', 'relais en erreur (500)'], ['absent', 'vieux relais sans /etat (404 sans CORS)']]) {
     faux.etat = mode;
     e = await page({ width: 390, height: 844 });
@@ -731,15 +747,15 @@ try {
     const S = window.Signaler, r = {};
     for (const u of ['https://770lab.com/home/robots.html', 'https://770lab.com/home/robots', 'https://770lab.com/home/', 'https://770lab.com/home',
       'https://www.770lab.com/HOME/journal', 'https://770lab.com/havroutia/recherche', 'https://avinou-malkenou.web.app/cartes', 'https://koulam.app/tehilim',
-      'https://770lab.com/', 'https://770lab.com/autre', 'https://exemple.fr/home/', 'pas une adresse', '']) r[u] = S.projetDeLaPage(u);
+      'https://770lab.com/gescom/', 'https://www.770lab.com/GesCom/clients', 'https://770lab.com/', 'https://770lab.com/autre', 'https://exemple.fr/home/', 'pas une adresse', '']) r[u] = S.projetDeLaPage(u);
     return { r, projets: S.projets.map((p) => p.id + '=' + p.nom).join(',') };
   });
   const REGLE = { 'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots': 'pupitre', 'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home',
     'https://www.770lab.com/HOME/journal': 'home', 'https://770lab.com/havroutia/recherche': 'havroutia', 'https://avinou-malkenou.web.app/cartes': 'avinou',
-    'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
+    'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/gescom/': 'gescom', 'https://www.770lab.com/GesCom/clients': 'gescom', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
   const fausses = Object.keys(REGLE).filter((u) => regle.r[u] !== REGLE[u]);
   ok(!fausses.length, 'Signaler.projetDeLaPage : le projet d’une adresse, comme le relais' + (fausses.length ? ' — faux : ' + fausses.map((u) => u + ' → ' + regle.r[u]).join(' ; ') : ''));
-  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,koulam=KOULAM', 'Signaler.projets : les 5 projets, dans l’ordre du pupitre');
+  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,gescom=GesCom,koulam=KOULAM', 'Signaler.projets : les 6 projets, dans l’ordre du pupitre');
   await q0.ctx.close();
 
   remettre(); faux.projets.home = false;
@@ -825,7 +841,7 @@ try {
   await pr.p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
   const det = await pr.p.evaluate(() => window.__comptes.slice(-1)[0]);
   const parProjet = det && det.projets ? PROJETS.map((id) => id + ' ' + det.projets[id].aTraiter + '/' + det.projets[id].total).join(', ') : '';
-  ok(det && det.aTraiter === 4 && det.total === 10 && parProjet === 'home 1/3, pupitre 1/1, havroutia 1/2, avinou 1/2, koulam 0/1',
+  ok(det && det.aTraiter === 4 && det.total === 10 && parProjet === 'home 1/3, pupitre 1/1, havroutia 1/2, avinou 1/2, gescom 0/0, koulam 0/1',
     'l’événement « signaler:demandes » compte aussi par projet (à traiter / en tout) : ' + parProjet);
   const puceEtFiltres = async () => pr.p.evaluate(() => {
     const pc = document.querySelector('.sgn-puce'), f = document.querySelector('.sgn-filtres');
@@ -1461,11 +1477,15 @@ try {
   pb11 = await controler(E.p);
   await capture(E.p, 'sans-empreinte-768-dark.png');
   await E.p.click('[data-a="activer"]');
-  await etatDit(E.p, /^Empreinte activée sur cet appareil/);
+  // marie a déjà eu un appareil (plus haut) : celui-ci, ajouté avec la clé seule, n'est pas de confiance (une clé volée suffirait à
+  // l'ajouter). Il se connecte et envoie, mais ne met pas en ligne : le relais répond 403 « confiance », le bouton le dit.
+  await etatDit(E.p, /^Empreinte activée sur cet appareil : la prochaine fois, elle suffira pour envoyer\. Il a été ajouté avec la clé d’équipe seule/);
   n0 = (await ctl('appels')).length;
   await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
-  await etatDit(E.p, /^Mise en ligne lancée/);
-  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).length === 1, 'activée (une session fraîche) : « Mettre en ligne » part sans redemander l’empreinte');
+  await etatDit(E.p, /^Cet appareil a été ajouté avec la clé d’équipe seule : il ne peut pas mettre en ligne\./);
+  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).length === 0,
+    'activée avec la clé seule (marie avait déjà un appareil) : « Mettre en ligne » est refusé (403 « confiance »), sans empreinte de plus, rien ne part, on le dit');
+  await capture(E.p, 'pas-de-confiance-768-dark.png');
   // « Annuler » à la souris : garder le bouton appuyé.
   ok((await retourDe(R7, { etat: 'en_ligne', resume: 'En ligne.', annulation: { depot: '770lab/home', commits: ['fedcba987654'] } })).ok, 'retour « en ligne »');
   await actualiser(E.p, false);
