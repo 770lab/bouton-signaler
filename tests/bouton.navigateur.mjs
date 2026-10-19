@@ -146,6 +146,7 @@ const H2C = join(RACINE, 'tests', '.cache', 'html2canvas-1.4.1.min.js');
 async function page(taille, o = {}) {
   const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light' });
   if (o.cle) await ctx.addInitScript((k) => { try { if (!localStorage.getItem('signaler_cle_v1')) localStorage.setItem('signaler_cle_v1', k); } catch (e) {} }, o.cle);
+  if (o.init) await ctx.addInitScript(o.init);
   const p = await ctx.newPage();
   if (existsSync(H2C)) await p.route('https://cdnjs.cloudflare.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: readFileSync(H2C, 'utf8') }));
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
@@ -296,6 +297,18 @@ try {
   ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)), 'rallumé depuis le pupitre : Signaler.montrer() fait revenir le rond sans recharger la page');
   ok(!!(await e.p.waitForFunction(() => { const b = document.querySelector('.sgn-badge'); return b && b.style.display !== 'none' && b.textContent === '4'; }, null, { timeout: 5000 }).catch(() => null)), 'avec son nombre à traiter (4)');
   ok(e.erreursPage.length === 0, 'aucune erreur JavaScript');
+  await e.ctx.close();
+  // Page qui cache le bouton au démarrage (écran verrouillé d'Avinou Malkenou, Home avant la connexion) : pas un mot au relais.
+  remettre(); faux.etat = 'on';
+  lusEtat = faux.appelsEtat;
+  e = await page({ width: 390, height: 844 }, { cle: CLE, init: () => {
+    // la démo pose sa propre SignalerConfig : on y ajoute visible() au moment où elle l'écrit
+    let v; Object.defineProperty(window, 'SignalerConfig', { configurable: true, get: () => v, set: (x) => { v = Object.assign({}, x, { visible: () => !!window.__ouvert }); } });
+  } });
+  await e.p.waitForTimeout(1500);
+  ok(!(await e.p.$('.sgn-fab')) && faux.appelsEtat === lusEtat, 'caché au démarrage : ni rond, ni appel à GET /etat');
+  await e.p.evaluate(() => { window.__ouvert = true; window.Signaler.montrer(); });
+  ok(!!(await e.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)) && faux.appelsEtat > lusEtat, 'puis Signaler.montrer() (déverrouillage, connexion) : le relais est interrogé et le rond paraît');
   await e.ctx.close();
   for (const [mode, dit] of [['on', 'allumé'], ['erreur', 'relais en erreur (500)'], ['absent', 'vieux relais sans /etat (404 sans CORS)']]) {
     faux.etat = mode;
@@ -512,9 +525,9 @@ try {
     { dit: 'relais qui dit « origine: false » (GET /etat lisible de partout)', theme: 'light', o: { origine: LOCALE }, regle: () => { faux.etatOuvert = true; },
       liste: /^Page non autorisée : ce site n’est pas dans la liste du relais \(ORIGINES\)\.$/, avant: /^Cette page n’est pas autorisée par le relais/, envoi: /^Pas envoyé : page non autorisée/ },
     { dit: 'relais du contrat (pas de CORS pour une page refusée)', theme: 'dark', o: { origine: LOCALE }, regle: () => {},
-      liste: /pas à cette page : son adresse n’est sans doute pas dans sa liste \(ORIGINES\), ou le relais n’est pas encore à jour/, avant: /^$/, envoi: /^Pas envoyé : le relais refuse cette page/ },
+      liste: /pas à cette page : il n’est sans doute pas encore à jour pour « Mes demandes » \(à redéployer\), ou l’adresse de cette page n’est pas dans sa liste \(ORIGINES\)/, avant: /^$/, envoi: /^Pas envoyé : le relais refuse cette page/ },
     { dit: 'vieux relais, d’avant « Mes demandes » (404 sans CORS)', theme: 'light', o: {}, regle: () => { faux.etat = 'absent'; faux.demandes = 'absent'; },
-      liste: /ou le relais n’est pas encore à jour pour « Mes demandes »/ },
+      liste: /il n’est sans doute pas encore à jour pour « Mes demandes » \(à redéployer\)/ },
     { dit: 'relais éteint', theme: 'dark', o: { relais: RELAIS_ETEINT }, regle: () => {},
       liste: /^Le relais est injoignable/, avant: /^$/, envoi: /^Pas envoyé : le relais ne répond pas/ },
   ];

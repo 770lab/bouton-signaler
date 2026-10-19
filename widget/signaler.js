@@ -39,7 +39,7 @@
   // Pourquoi le relais ne répond pas : le navigateur ne lit pas une réponse sans CORS, il faut le dire en clair à la personne.
   var MSG = {
     origine: 'Page non autorisée : ce site n’est pas dans la liste du relais (ORIGINES).',
-    refus: 'Le relais répond, mais pas à cette page : son adresse n’est sans doute pas dans sa liste (ORIGINES), ou le relais n’est pas encore à jour pour « Mes demandes ».',
+    refus: 'Le relais répond, mais pas à cette page : il n’est sans doute pas encore à jour pour « Mes demandes » (à redéployer), ou l’adresse de cette page n’est pas dans sa liste (ORIGINES).',
     ancien: 'Le relais n’est pas encore à jour : il ne connaît pas « Mes demandes ». Il doit être redéployé.',
     injoignable: 'Le relais est injoignable : vérifie la connexion, puis touche « Actualiser ».',
     origineEnvoi: 'Cette page n’est pas autorisée par le relais (son adresse n’est pas dans sa liste, ORIGINES) : l’envoi sera refusé.',
@@ -143,7 +143,8 @@
   var fab = null, badge = null, fond = null, dictee = null, enregistreur = null, envoiEnCours = false;
   // pret : le relais a dit si le bouton est coupé (ou n'a pas répondu à temps) · coupe : coupé depuis le pupitre
   // origineRefusee : le relais a dit (GET /etat) que cette page n'est pas dans sa liste
-  var pret = false, coupe = false, cacheParPage = false, origineRefusee = false;
+  // aVerifier : la page cachait le bouton au démarrage, le relais n'a pas encore été interrogé (montrer() le fera)
+  var pret = false, coupe = false, aVerifier = false, cacheParPage = false, origineRefusee = false;
 
   // ── LES APPELS AU RELAIS (sans cookie, jamais mis en cache) ────────────────────────────────────────────────────────────────
   // Rend le JSON de la réponse avec son statut ({ statut }), ou échoue si le relais est injoignable ou trop lent.
@@ -169,7 +170,7 @@
       return !(j && j.actif === false);
     }, function () { return true; });
   }
-  var verification = lireEtat(), reverification = null;
+  var reverification = null;
   // Une route du relais a échoué SANS réponse lisible. Le navigateur ne dit pas pourquoi (réseau coupé ou réponse sans CORS) :
   // GET /etat, public, dit lui-même si la page est permise ; illisible lui aussi, une requête « opaque » (no-cors, rien n'est
   // lu) n'échoue que si le relais est vraiment injoignable. Rend 'origine' | 'refus' | 'ancien' | 'reseau', gardé 30 s.
@@ -595,7 +596,13 @@
     majCompteur();
     chargerDemandes();
   }
-  function demarrer() { verification.then(function (actif) { pret = true; if (!actif) { coupe = true; return; } monter(); }); }
+  // Page qui cache le bouton au démarrage (écran verrouillé, visiteur…) : rien n'est demandé au relais avant montrer().
+  function demarrer() {
+    var visible = true;
+    try { if (typeof C.visible === 'function') visible = !!C.visible(); } catch (e) { visible = false; }
+    if (!visible) { pret = true; aVerifier = true; return; }
+    lireEtat().then(function (actif) { pret = true; if (!actif) { coupe = true; return; } monter(); });
+  }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', demarrer); else demarrer();
 
   window.Signaler = {
@@ -603,12 +610,14 @@
     cacher: function () { cacheParPage = true; if (fab) fab.style.display = 'none'; majCompteur(); },
     montrer: function () {
       cacheParPage = false;
-      if (coupe && pret) {
-        // Coupé (au chargement ou par une réponse « coupé ») : on redemande au relais avant de montrer quoi que ce soit.
+      if ((coupe || aVerifier) && pret) {
+        // Coupé (au chargement ou par une réponse « coupé »), ou relais pas encore interrogé : on lui demande avant de montrer.
         if (!reverification) reverification = lireEtat().then(function (actif) {
-          reverification = null;
-          if (!actif || cacheParPage) return;
-          coupe = false; monter(); if (fab) fab.style.display = ''; majCompteur();
+          reverification = null; aVerifier = false;
+          if (!actif) { coupe = true; return; }
+          coupe = false;
+          if (cacheParPage) return;
+          monter(); if (fab) fab.style.display = ''; majCompteur();
         });
         return;
       }
