@@ -4,6 +4,7 @@
 // ici d'après le contrat : le test du bouton ne dépend pas du code de ces routes côté relais (testées par relais.test.mjs).
 //   node tests/bouton.navigateur.mjs        (Playwright doit être installé : npm i -D playwright, ou global via NODE_PATH)
 //   SIGNALER_CAPTURES=/un/dossier            où ranger les captures d'écran (défaut : tests/.cache/)
+//   SIGNALER_PREFIXE=g1-                     un préfixe pour leurs noms (pour comparer deux passages)
 // html2canvas : servi depuis tests/.cache/ s'il y est (le navigateur du test ne va pas sur Internet), sinon depuis cdnjs.
 // Les pages des projets (http://770lab.com:<port>/home/, /home/robots.html, /havroutia/) : le navigateur envoie 770lab.com sur
 // 127.0.0.1 (--host-resolver-rules), le site y sert la démo ; le bouton y trouve son projet d'après l'adresse, comme en ligne.
@@ -16,6 +17,7 @@ import { signaler } from '../relay/cloudflare/worker.mjs';
 
 const RACINE = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CAPTURES = process.env.SIGNALER_CAPTURES || join(RACINE, 'tests', '.cache');
+const PREFIXE = String(process.env.SIGNALER_PREFIXE || '').replace(/[^a-z0-9_-]/gi, '');
 mkdirSync(CAPTURES, { recursive: true });
 let chromium;
 try { ({ chromium } = createRequire(import.meta.url)('playwright')); } catch (e) { console.log('⊘ Playwright absent : test du navigateur non joué'); process.exit(0); }
@@ -31,6 +33,8 @@ const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
 const DEMO = join(RACINE, 'demo', 'index.html');
 const site = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), chemin = decodeURIComponent(u.pathname), attribut = u.searchParams.get('dataProjet');
+  if (chemin === '/api/panne') { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end('{"ok":false}'); }
+  if (chemin === '/api/panne-xhr') { res.writeHead(503); return res.end(); }
   if (/^\/(home|havroutia)/i.test(chemin) || (attribut && chemin === '/demo/index.html')) {
     let html = readFileSync(DEMO, 'utf8');
     if (attribut) html = html.replace('<script src="../widget/signaler.js"', '<script src="../widget/signaler.js" data-projet="' + attribut.replace(/[^a-z0-9_-]/gi, '') + '"');
@@ -105,7 +109,7 @@ function demandesDeMarie() {
   ];
 }
 const faux = { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [],
-  entetesEtat: null, requetesEtat: [] };
+  entetesEtat: null, requetesEtat: [], signalements: [] };
 function remettre() {
   Object.assign(faux, { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [], requetesEtat: [] });
 }
@@ -169,6 +173,8 @@ const relais = http.createServer(async (req, res) => {
     Object.assign(d, { etat: 'envoyee', sessionUrl: 'https://claude.ai/code/session_01RENVOI', majLeMs: Date.now(), retourHash: 'e'.repeat(64) }); delete d.erreur;
     return repondre(200, { ok: true, demande: publique(d) });
   }
+  // faux.signalements : chaque corps de POST /signaler tel que le bouton l'a envoyé (images avec leur dessin, contexte…).
+  if (req.method === 'POST' && u.pathname === '/signaler') { try { faux.signalements.push(JSON.parse(texteDe(corps))); } catch (e) {} }
   if (req.method === 'POST' && u.pathname === '/signaler' && permise && qui) {
     let pj = null; try { pj = projetDeLaPage(JSON.parse(texteDe(corps)).contexte.url); } catch (e) {}
     if (faux.coupe || (pj && faux.projets[pj] === false)) return repondre(403, { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' });
@@ -182,12 +188,20 @@ const RELAIS = 'http://127.0.0.1:' + relais.address().port;
 
 const navigateur = await chromium.launch({ args: ['--host-resolver-rules=MAP 770lab.com 127.0.0.1'] });
 const H2C = join(RACINE, 'tests', '.cache', 'html2canvas-1.4.1.min.js');
+// html2canvas, enveloppé : window.__h2cDelai (ms) retarde la photo, pour voir le rond PENDANT qu'elle se fait.
+const H2C_RETARD = '\n;(function(){var v=window.html2canvas;if(!v)return;window.html2canvas=function(e,o){var d=window.__h2cDelai||0;'
+  + 'return new Promise(function(r){setTimeout(r,d)}).then(function(){return v(e,o)})}})();';
+// o.toucher : écran tactile (hasTouch ; isMobile jusqu'à 768 px) · o.mouvement : 'reduce' pour prefers-reduced-motion
 async function page(taille, o = {}) {
-  const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light' });
+  const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light', hasTouch: !!o.toucher,
+    isMobile: !!o.toucher && taille.width <= 768, reducedMotion: o.mouvement || 'no-preference' });
   if (o.cle) await ctx.addInitScript((k) => { try { if (!localStorage.getItem('signaler_cle_v1')) localStorage.setItem('signaler_cle_v1', k); } catch (e) {} }, o.cle);
   if (o.init) await ctx.addInitScript(o.init);
   const p = await ctx.newPage();
-  if (existsSync(H2C)) await p.route('https://cdnjs.cloudflare.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: readFileSync(H2C, 'utf8') }));
+  await p.route('https://cdnjs.cloudflare.com/**', async (route) => {
+    const corps = existsSync(H2C) ? readFileSync(H2C, 'utf8') : await (await route.fetch()).text();
+    return route.fulfill({ contentType: 'text/javascript', body: corps + H2C_RETARD });
+  });
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
   // o.chemin : une autre page que la démo (/home/, /home/robots.html…) · o.projet : ?projet= (SignalerConfig.projet de la démo)
   // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site)
@@ -196,7 +210,7 @@ async function page(taille, o = {}) {
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
-const capture = (p, nom) => p.screenshot({ path: join(CAPTURES, nom) });
+const capture = (p, nom) => p.screenshot({ path: join(CAPTURES, PREFIXE + nom) });
 
 // Ce que la règle de l'interface interdit, mesuré dans la page : défilement en largeur, élément qui dépasse de la fenêtre,
 // rangée de plus de 3 boutons, italique, émoji (texte, aria-label, title, placeholder, alt).
@@ -205,7 +219,7 @@ async function controler(p) {
     const pb = [], de = document.documentElement;
     const nom = (e) => e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '') + ' « ' + (e.textContent || '').trim().slice(0, 30) + ' »';
     if (de.scrollWidth > de.clientWidth) pb.push('la page défile en largeur (' + de.scrollWidth + ' > ' + de.clientWidth + ')');
-    const tous = [...document.querySelectorAll('.sgn-fab, .sgn-fab *, .sgn-badge, .sgn-fond, .sgn-fond *')];
+    const tous = [...document.querySelectorAll('.sgn-fab, .sgn-fab *, .sgn-badge, .sgn-fond, .sgn-fond *, .sgn-bulle, .sgn-bulle *')];
     const RX = /\p{Extended_Pictographic}/u;
     for (const e of tous) {
       if (getComputedStyle(e).fontStyle !== 'normal') pb.push('italique : ' + nom(e));
@@ -213,7 +227,7 @@ async function controler(p) {
       for (const n of e.childNodes) if (n.nodeType === 3 && RX.test(n.nodeValue)) pb.push('émoji : ' + n.nodeValue.trim().slice(0, 40));
       for (const a of ['aria-label', 'title', 'placeholder', 'alt']) { const v = e.getAttribute(a); if (v && RX.test(v)) pb.push('émoji (' + a + ') : ' + v); }
     }
-    for (const sel of ['.sgn-fab', '.sgn-badge']) {
+    for (const sel of ['.sgn-fab', '.sgn-badge', '.sgn-bulle']) {
       const e = document.querySelector(sel); if (!e || getComputedStyle(e).display === 'none') continue;
       const r = e.getBoundingClientRect();
       if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) pb.push(sel + ' sort de l’écran');
@@ -229,7 +243,11 @@ async function controler(p) {
         if (r.left < b.left - 0.5 || r.right > b.right + 0.5) pb.push('dépasse de la fenêtre : ' + nom(e));
         if (!e.closest('.sgn-vignettes') && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1) pb.push('contenu plus large que sa boîte : ' + nom(e));
       }
-      const clics = [...boite.querySelectorAll('button, a[href], label.sgn-bouton')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('.sgn-v'); });
+    }
+    // Pas plus de 3 boutons par rangée, dans la fenêtre comme dans la bulle (les vignettes des écrans sont une galerie).
+    for (const zone of document.querySelectorAll('.sgn-boite, .sgn-bulle')) {
+      if (getComputedStyle(zone).display === 'none') continue;
+      const clics = [...zone.querySelectorAll('button, a[href], label.sgn-bouton')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('.sgn-v'); });
       const rangs = [];
       for (const e of clics) {
         const r = e.getBoundingClientRect(), c = r.top + r.height / 2;
@@ -256,11 +274,12 @@ try {
   await p.waitForSelector('.sgn-boite');
   await p.waitForSelector('.sgn-v img', { timeout: 15000 });
   ok((await p.$$('.sgn-v img')).length === 1, 'l’écran est photographié AVANT que la fenêtre s’ouvre (une capture)');
-  // Sous un contenu plus court que l'écran, la capture prend le fond de la page — pas du noir (le transparent en JPEG).
+  // Là où rien n'est peint (sous un contenu plus court que l'écran, ou dans la marge de la page, ici le coin bas gauche), la
+  // capture prend le fond de la page — pas du noir (le transparent en JPEG).
   const basDeCapture = await p.evaluate(() => new Promise((ok) => {
     const img = new Image();
     img.onload = () => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
-      const d = g.getImageData(Math.floor(img.width / 2), img.height - 5, 1, 1).data; ok(d[0] + d[1] + d[2]); };
+      const d = g.getImageData(4, img.height - 5, 1, 1).data; ok(d[0] + d[1] + d[2]); };
     img.src = window.Signaler._etat().captures[0].donnees;
   }));
   ok(basDeCapture > 600, 'le bas de la capture a la couleur du fond de la page, pas du noir (somme RVB ' + basDeCapture + ')');
@@ -766,6 +785,241 @@ try {
   ok(!(await pr.p.$('.sgn-puce')), 'Signaler.demandes(\'toutes\') (le pupitre d’avant) : sans puce, comme avant');
   ok(!pr.erreursPage.length, 'aucune erreur JavaScript');
   await pr.ctx.close();
+  console.log('10. Le rond déplacé, la photo, le dessin, plusieurs écrans, la boîte noire, le point rouge (360 → 1280, clair = doigt, sombre = souris)');
+  // Le doigt passe par le protocole de Chrome (Playwright ne sait que « tap ») : de vrais pointerdown / move / up de type touch.
+  const cdps = new WeakMap();
+  const doigt = async (p, type, x, y) => {
+    if (!cdps.has(p)) cdps.set(p, await p.context().newCDPSession(p));
+    await cdps.get(p).send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }] });
+  };
+  const toucherEl = (p, toucher, sel) => (toucher ? p.tap(sel) : p.click(sel));
+  // Un geste qui suit des points ; attente : avant de bouger (appui long) ; auMilieu : appelé pendant l'appui, avant de bouger.
+  async function geste(p, toucher, pts, o = {}) {
+    const [x0, y0] = pts[0];
+    if (toucher) await doigt(p, 'touchStart', x0, y0); else { await p.mouse.move(x0, y0); await p.mouse.down(); }
+    if (o.auMilieu) { await attendre(140); await o.auMilieu(); }
+    if (o.attente) await attendre(Math.max(0, o.attente - (o.auMilieu ? 140 : 0)));
+    // À la vitesse d'une main (une image sur 60), et le doigt s'arrête avant de se lever : sinon Chrome y voit un « lancer »
+    // et écarte le toucher suivant (il le prend pour l'arrêt du lancer).
+    for (const [x, y] of pts.slice(1)) { if (toucher) { await doigt(p, 'touchMove', x, y); await attendre(16); } else await p.mouse.move(x, y); }
+    if (toucher) { await attendre(150); await doigt(p, 'touchEnd'); await attendre(300); } else await p.mouse.up();
+  }
+  const ligne = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]);
+  const ellipse = (cx, cy, rx, ry, n = 28) => Array.from({ length: n + 1 }, (_, i) => [cx + rx * Math.cos(2 * Math.PI * i / n), cy + ry * Math.sin(2 * Math.PI * i / n)]);
+  const boite = (p, sel) => p.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; });
+  const brouillonGarde = (p) => p.evaluate(() => { try { const o = JSON.parse(sessionStorage.getItem('signaler_brouillon_v1') || 'null'); return o ? { n: o.captures.length, texte: o.texte, traits: o.captures.map((c) => c.traits.length), attente: o.attente } : null; } catch (e) { return 'illisible'; } });
+  const pastille = (p) => p.evaluate(() => { const f = document.querySelector('.sgn-fab'), x = f && f.querySelector('.sgn-pastille'); return f && f.classList.contains('sgn-attente') && getComputedStyle(x).display !== 'none' ? x.textContent : ''; });
+  const bulleVue = (p) => p.evaluate(() => { const b = document.querySelector('.sgn-bulle'); return b && getComputedStyle(b).display !== 'none' ? [...b.querySelectorAll('p, button')].map((x) => x.textContent.trim()).join(' | ') : ''; });
+  const ouvrirAvecPhoto = async (p, toucher, n) => {
+    await toucherEl(p, toucher, '.sgn-fab');
+    await p.waitForFunction((k) => document.querySelector('.sgn-toile canvas') && window.Signaler._etat().captures.length === k, n, { timeout: 20000 });
+  };
+  const SECRET_TEXTE = 'secret-texte-123', SECRET_MDP = 'MotDePasse-Secret-456', ERREUR_DEMO = 'Le calcul du total a planté (démo)';
+  for (const [w, ht] of [[360, 780], [412, 915], [768, 1024], [1280, 900]]) {
+    for (const theme of ['light', 'dark']) {
+      const toucher = theme === 'light', nom = 'rond-' + w + '-' + theme, dit = w + ' px ' + (toucher ? 'au doigt' : 'à la souris') + ' (' + (theme === 'light' ? 'clair' : 'sombre') + ')';
+      remettre();
+      const x = await page({ width: w, height: ht }, { cle: CLE, theme, toucher });
+      const p = x.p;
+      await p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
+      let pbs = [];
+      // a) Le point rouge : une vraie erreur, une fois ; « Ignorer » l'éteint ; la même erreur ne revient pas.
+      await toucherEl(p, toucher, '#lancer-erreur');
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      const a1 = await p.evaluate(() => ({ point: getComputedStyle(document.querySelector('.sgn-point')).display !== 'none', label: document.querySelector('.sgn-fab').getAttribute('aria-label') }));
+      ok(a1.point && (await bulleVue(p)) === 'Un problème vient d’arriver sur cette page. Le signaler ? | Signaler | Ignorer' && /Un problème vient d’arriver/.test(a1.label), dit + ' : une erreur de la page allume le point rouge et la bulle « Le signaler ? »');
+      pbs = pbs.concat(await controler(p));
+      const bb1 = await boite(p, '.sgn-bulle'), fb1 = await boite(p, '.sgn-fab');
+      ok(bb1.y + bb1.h <= fb1.y && bb1.x >= 0 && bb1.x + bb1.w <= w, dit + ' : la bulle est juste au-dessus du rond, à l’écran');
+      await p.waitForTimeout(300);   // la bulle entre en fondu (0,18 s)
+      await capture(p, nom + '-alerte.png');
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-ignorer"]');
+      ok(!(await bulleVue(p)) && !(await p.evaluate(() => document.querySelector('.sgn-fab').classList.contains('sgn-alerte'))), dit + ' : « Ignorer » ferme la bulle et éteint le point');
+      await toucherEl(p, toucher, '#lancer-erreur');
+      await p.evaluate(() => { const x = new XMLHttpRequest(); x.open('GET', '/api/panne-xhr?jeton=xhr-secret'); x.send(); });
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      ok(true, dit + ' : la même erreur une seconde fois ne rallume rien ; une requête XMLHttpRequest en 503 (autre problème) rallume la bulle');
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-ignorer"]');
+      // b) La boîte noire : deux champs (texte, mot de passe), une requête 404, une ancre, un défilement.
+      await p.fill('#champ-nom', SECRET_TEXTE);
+      await p.focus('#champ-mdp'); await p.keyboard.type(SECRET_MDP);
+      await p.evaluate(() => fetch('/api/absent?cle=zzz').then(() => {}, () => {}));
+      await toucherEl(p, toucher, '#vers-bas');
+      await p.waitForTimeout(500);
+      await p.evaluate(() => { document.activeElement && document.activeElement.blur && document.activeElement.blur(); window.scrollTo(0, 0); });
+      await p.waitForTimeout(500);
+      ok(!(await bulleVue(p)), dit + ' : une requête en 404 n’allume rien (seulement 5xx et réseau)');
+      // c) Déplacer le rond : appui long 0,45 s puis glisser ; il s'enfonce dès l'appui ; ce n'est pas un toucher.
+      const f0 = await boite(p, '.sgn-fab'), but = [12 + 24 + 30, Math.round(ht * 0.62)];
+      let enfonce = 1;
+      await geste(p, toucher, ligne([f0.cx, f0.cy], but, 14), { attente: 450, auMilieu: async () => { enfonce = await p.$eval('.sgn-fab', (e) => new DOMMatrix(getComputedStyle(e).transform).a); } });
+      await p.waitForTimeout(250);
+      const f1 = await boite(p, '.sgn-fab'), b1 = await boite(p, '.sgn-badge');
+      const pos = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('signaler_pos_v1') || '{}')[location.origin + location.pathname] || null; } catch (e) { return null; } });
+      ok(enfonce < 0.95, dit + ' : à l’appui, le rond s’enfonce (échelle ' + enfonce.toFixed(2) + ')');
+      ok(Math.abs(f1.cx - but[0]) <= 2 && Math.abs(f1.cy - but[1]) <= 2 && await p.$eval('.sgn-fab', (e) => e.classList.contains('sgn-deplace')), dit + ' : appui long puis glisser, le rond suit (' + Math.round(f1.cx) + ', ' + Math.round(f1.cy) + ')');
+      ok(!(await p.$('.sgn-boite')) && (await p.evaluate(() => window.Signaler._etat().captures.length)) === 0, dit + ' : le déplacer n’ouvre pas la fenêtre et ne photographie rien');
+      ok(b1.x < f1.x + f1.w + 10 && b1.x + b1.w > f1.x + f1.w - 14 && b1.y < f1.y && b1.y + b1.h > f1.y, dit + ' : le nombre rouge suit le rond (son coin haut droit)');
+      ok(pos && pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1, dit + ' : la place est gardée pour cette page, en proportion (' + (pos ? pos.x + ', ' + pos.y : 'rien') + ')');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-deplace.png');
+      // Glissé hors de l'écran : il reste dedans, loin des bords.
+      const f2 = await boite(p, '.sgn-fab');
+      await geste(p, toucher, ligne([f2.cx, f2.cy], [w + 60, -60], 10), { attente: 450 });
+      await p.waitForTimeout(250);
+      const f3 = await boite(p, '.sgn-fab');
+      ok(f3.x + f3.w <= w - 11 && f3.y >= 15, dit + ' : tiré hors de l’écran, il s’arrête à 12 px du bord (' + Math.round(w - f3.x - f3.w) + ' px, haut ' + Math.round(f3.y) + ' px)');
+      await geste(p, toucher, ligne([f3.cx, f3.cy], but, 10), { attente: 450 });
+      await p.waitForTimeout(250);
+      // d) Une requête en échec (500) : la bulle ; « Signaler » photographie l'écran (l'anneau tourne pendant ce temps) puis ouvre la fenêtre.
+      await toucherEl(p, toucher, '#requete-ko');
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      const bb2 = await boite(p, '.sgn-bulle'), fb2 = await boite(p, '.sgn-fab');
+      ok(bb2.y + bb2.h <= fb2.y && Math.abs(bb2.x - fb2.x) <= 1, dit + ' : une requête en 500 rallume la bulle, posée au-dessus du rond déplacé');
+      // Le haut de la page à l'écran (toucher le bouton l'a fait défiler) : « Enregistrer » sera sur la photo.
+      await p.evaluate(() => window.scrollTo(0, 0));
+      await p.waitForTimeout(400);
+      await p.evaluate(() => { window.__h2cDelai = 1500; });
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-signaler"]');
+      await p.waitForSelector('.sgn-fab.sgn-occupe', { timeout: 3000 });
+      await p.waitForTimeout(450);
+      const anim = await p.evaluate(() => {
+        const f = document.querySelector('.sgn-fab'), st = (s) => getComputedStyle(f.querySelector(s));
+        return { occupe: f.classList.contains('sgn-occupe'), anneau: st('.sgn-anneau').opacity + ' ' + st('.sgn-anneau').animationName, onde: st('.sgn-onde').animationName,
+          etoile: st('.sgn-etoile').animationName, fenetre: !!document.querySelector('.sgn-boite'), bulle: !!document.querySelector('.sgn-bulle') && getComputedStyle(document.querySelector('.sgn-bulle')).display !== 'none' };
+      });
+      ok(anim.occupe && anim.anneau === '1 sgn-tourne' && anim.onde === 'sgn-onde' && anim.etoile === 'sgn-tourne' && !anim.fenetre && !anim.bulle,
+        dit + ' : pendant la photo, l’anneau tourne, l’onde s’échappe, l’étoile tourne (' + anim.anneau + ', ' + anim.onde + ', ' + anim.etoile + ')');
+      await capture(p, nom + '-photo.png');
+      await p.evaluate(() => { window.__h2cDelai = 0; });
+      await p.waitForSelector('.sgn-toile canvas', { timeout: 20000 });
+      ok((await p.inputValue('.sgn-texte')) === 'Une requête a échoué : GET /api/panne (erreur 500)' && (await p.getAttribute('.sgn-type[data-v="bug"]', 'aria-pressed')) === 'true',
+        dit + ' : « Signaler » ouvre un bug, avec la ligne « ' + (await p.inputValue('.sgn-texte')) + ' »');
+      // e) Le dessin : une ellipse autour du bouton « Enregistrer » de la capture.
+      const geo = await p.evaluate(() => {
+        const c = document.querySelector('.sgn-toile canvas').getBoundingClientRect(), b = document.getElementById('panne').getBoundingClientRect(), cap = window.Signaler._etat().captures[0];
+        return { c: { x: c.left, y: c.top, w: c.width, h: c.height }, b: { cx: b.left + b.width / 2, cy: b.top + b.height / 2, w: b.width, h: b.height }, vw: cap.vw, vh: cap.vh };
+      });
+      const sx = geo.c.w / geo.vw, sy = geo.c.h / geo.vh;
+      const tour = ellipse(geo.c.x + geo.b.cx * sx, geo.c.y + geo.b.cy * sy, geo.b.w * sx / 2 + 8, geo.b.h * sy / 2 + 8);
+      await geste(p, toucher, ligne([geo.c.x + 10, geo.c.y + 10], [geo.c.x + 40, geo.c.y + 30], 4));
+      ok(await p.evaluate(() => window.Signaler._etat().captures[0].traits.length === 1 && !document.querySelector('[data-a="gomme"]').disabled), dit + ' : un trait sur la capture, « Effacer le dessin » s’allume');
+      await toucherEl(p, toucher, '[data-a="gomme"]');
+      ok(await p.evaluate(() => window.Signaler._etat().captures[0].traits.length === 0 && document.querySelector('[data-a="gomme"]').disabled), dit + ' : « Effacer le dessin » retire les traits');
+      await geste(p, toucher, tour);
+      const tr = await p.evaluate(() => { const t = window.Signaler._etat().captures[0].traits; return { n: t.length, e: t[0] && t[0].e, svg: document.querySelectorAll('.sgn-v[data-i="0"] svg polyline').length }; });
+      ok(tr.n === 1 && tr.e && tr.e.id === 'panne' && tr.e.balise === 'button' && tr.svg === 1, dit + ' : l’ellipse autour d’« Enregistrer » : l’élément dessous est ' + (tr.e ? tr.e.chemin + ' « ' + tr.e.texte + ' »' : 'introuvable') + ', la vignette porte le trait');
+      const rouge = await p.evaluate(() => { const c = document.querySelector('.sgn-toile canvas'), g = c.getContext('2d'), d = g.getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i] > 200 && d[i + 1] < 90) n++; return n; });
+      ok(rouge > 200, dit + ' : le trait rouge se voit sur la capture (' + rouge + ' points)');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-dessin.png');
+      // f) Plusieurs écrans : « + Un autre écran », la pastille blanche, un rechargement, cinq écrans en tout.
+      await toucherEl(p, toucher, '[data-a="autre"]');
+      ok(!(await p.$('.sgn-boite')) && (await pastille(p)) === '1' && /^Brouillon gardé \(1 écran\)/.test(await bulleVue(p)), dit + ' : « + Un autre écran » ferme la fenêtre, la pastille blanche dit 1, la bulle explique');
+      pbs = pbs.concat(await controler(p));
+      await p.waitForTimeout(300);
+      await capture(p, nom + '-attente.png');
+      await p.reload();
+      await p.waitForSelector('.sgn-fab');
+      await p.waitForTimeout(300);
+      const f4 = await boite(p, '.sgn-fab');
+      ok(Math.abs(f4.cx - but[0]) <= 1 && Math.abs(f4.cy - but[1]) <= 1 && (await pastille(p)) === '1', dit + ' : après un rechargement, le rond est à sa place et la pastille dit toujours 1');
+      for (let k = 2; k <= 5; k++) {
+        await ouvrirAvecPhoto(p, toucher, k);
+        if (k === 3) {
+          await toucherEl(p, toucher, '[data-a="autre"]');
+          await p.reload(); await p.waitForSelector('.sgn-fab'); await p.waitForTimeout(200);
+          ok((await pastille(p)) === '3', dit + ' : rechargé avec 3 écrans en attente, la pastille dit 3');
+          continue;
+        }
+        if (k < 5) await toucherEl(p, toucher, '[data-a="autre"]');
+      }
+      const plein = await p.evaluate(() => ({ n: document.querySelectorAll('.sgn-v img').length, ajout: document.querySelector('[data-a="autre"]').textContent, off: document.querySelector('[data-a="autre"]').disabled, capt: document.querySelector('[data-a="capturer"]').disabled }));
+      ok(plein.n === 5 && plein.off && plein.capt && plein.ajout === '5 écrans au plus', dit + ' : cinq écrans au plus (« ' + plein.ajout + ' »)');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-cinq.png');
+      await p.keyboard.press('Escape');
+      await p.reload(); await p.waitForSelector('.sgn-fab'); await p.waitForTimeout(200);
+      const garde = await brouillonGarde(p);
+      ok((await pastille(p)) === '5' && garde && garde.n === 5 && garde.traits[0] === 1 && garde.texte === 'Une requête a échoué : GET /api/panne (erreur 500)', dit + ' : le brouillon de 5 écrans survit au rechargement (texte et dessin compris)');
+      await toucherEl(p, toucher, '.sgn-fab');
+      await p.waitForSelector('.sgn-toile canvas', { timeout: 10000 });
+      ok((await p.$$('.sgn-v img')).length === 5 && await p.evaluate(() => window.Signaler._etat().captures.length === 5) && (await p.$$('.sgn-v[data-i="0"] svg polyline')).length === 1, dit + ' : le rond rouvre les 5 écrans sans en prendre un sixième');
+      // g) L'envoi : 5 images, la première avec son dessin ; les éléments ; la boîte noire, sans rien de tapé.
+      const n0 = faux.signalements.length;
+      await toucherEl(p, toucher, '.sgn-envoyer');
+      await p.waitForSelector('.sgn-etat.ok', { timeout: 20000 });
+      const corps = faux.signalements[n0] || {}, cx = corps.contexte || {}, j = Array.isArray(cx.journal) ? cx.journal : [];
+      ok(Array.isArray(corps.captures) && corps.captures.length === 5, dit + ' : les 5 écrans partent');
+      const el0 = (cx.elements || [])[0] || {};
+      ok((cx.elements || []).length === 1 && el0.id === 'panne' && el0.balise === 'button' && /button#panne/.test(el0.chemin) && /Enregistrer/.test(el0.texte) && el0.ecran === 1,
+        dit + ' : contexte.elements = ' + JSON.stringify(cx.elements || []).slice(0, 160));
+      const pixels = await p.evaluate(({ src, pts }) => new Promise((ok) => {
+        const img = new Image();
+        img.onload = () => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+          let r = 0; for (const [fx, fy] of pts) { const d = g.getImageData(Math.min(img.width - 1, Math.round(fx * img.width)), Math.min(img.height - 1, Math.round(fy * img.height)), 1, 1).data; if (d[0] > 170 && d[1] < 110 && d[2] < 110) r++; }
+          ok(r); };
+        img.onerror = () => ok(-1);
+        img.src = src;
+      }), { src: corps.captures[0].donnees, pts: tour.map(([px, py]) => [(px - geo.c.x) / geo.c.w, (py - geo.c.y) / geo.c.h]).filter(([fx, fy]) => fx > 0.01 && fx < 0.99 && fy > 0.01 && fy < 0.99) });
+      ok(pixels >= 20, dit + ' : l’image envoyée porte le dessin (' + pixels + ' points rouges sur le tracé)');
+      const types = (t, f) => j.filter((e) => e.type === t && (!f || f(e)));
+      const tape = toucher ? 'toucher' : 'clic';
+      ok(types(tape, (e) => /#lancer-erreur/.test(e.cible)).length >= 1 && types(tape, (e) => /#vers-bas/.test(e.cible)).length === 1, dit + ' : boîte noire, les ' + (toucher ? 'touchers' : 'clics') + ' (« ' + (types(tape)[0] || {}).cible + ' »)');
+      ok(types('saisie', (e) => /^input\[text\]#champ-nom « Nom du client »$/.test(e.cible) && e.detail === 'validée').length === 1
+        && types('saisie', (e) => /^input\[password\]#champ-mdp « Mot de passe »$/.test(e.cible) && e.detail === 'validée').length === 1,
+        dit + ' : boîte noire, une ligne par champ, sans sa valeur (« ' + types('saisie').map((e) => e.cible).join(' », « ') + ' »)');
+      ok(types('page', (e) => e.cible === '/demo/index.html#bas' && e.detail === 'ancre').length === 1 && types('page', (e) => e.detail === 'chargement').length >= 1, dit + ' : boîte noire, les pages (chargement, ancre #bas)');
+      ok(types('defilement', (e) => e.cible === 'page' && /^y = \d+ px/.test(e.detail)).length >= 1, dit + ' : boîte noire, le défilement');
+      ok(types('erreur', (e) => e.detail.endsWith(ERREUR_DEMO) && /\.html:\d+$/.test(e.cible)).length >= 1, dit + ' : boîte noire, l’erreur de la page');
+      ok(types('requete', (e) => e.cible === 'GET /api/panne' && e.detail === 'statut 500').length === 1 && types('requete', (e) => e.cible === 'GET /api/panne-xhr' && e.detail === 'statut 503').length === 1
+        && types('requete', (e) => e.cible === 'GET /api/absent' && e.detail === 'statut 404').length === 1, dit + ' : boîte noire, les requêtes en échec (500, 503, 404), sans « ?… »');
+      ok(j.length > 0 && j.length <= 200 && j.every((e) => typeof e.t === 'number' && e.t >= 0 && typeof e.cible === 'string' && typeof e.detail === 'string')
+        && !j.some((e) => /sgn-|Signaler à Claude|Un autre écran/.test(e.cible)), dit + ' : ' + j.length + ' lignes, chacune avec t (ms avant l’envoi) ; rien du bouton lui-même');
+      const brut = JSON.stringify(corps), texteRoutine = (appels[appels.length - 1] || {}).text || '';
+      ok(![SECRET_TEXTE, SECRET_MDP, 'jeton=', 'demo-secret', 'xhr-secret', 'cle=zzz'].some((s) => brut.includes(s) || texteRoutine.includes(s)), dit + ' : ni le texte tapé, ni le mot de passe, ni « ?jeton=… » ne partent (corps envoyé et texte de la routine)');
+      ok(!(await brouillonGarde(p)) && !(await pastille(p)), dit + ' : envoyé, le brouillon est effacé (plus de pastille)');
+      await p.keyboard.press('Escape');
+      // h) Tourner l'écran : le rond déplacé est ramené dans l'écran.
+      await p.setViewportSize({ width: ht, height: w });
+      await p.waitForTimeout(250);
+      const f5 = await boite(p, '.sgn-fab');
+      ok(f5.x >= 11 && f5.x + f5.w <= ht - 11 && f5.y >= 15 && f5.y + f5.h <= w - 11, dit + ' : écran tourné (' + ht + ' × ' + w + '), le rond reste dans l’écran');
+      await p.setViewportSize({ width: w, height: ht });
+      await p.waitForTimeout(250);
+      // i) « Remettre le bouton à sa place ».
+      await ouvrirAvecPhoto(p, toucher, 1);
+      await toucherEl(p, toucher, '[data-a="remettre"]');
+      ok((await texte(p, '.sgn-etat')) === 'Le bouton est revenu à sa place.' && !(await p.$('[data-a="remettre"]'))
+        && !(await p.evaluate(() => document.querySelector('.sgn-fab').classList.contains('sgn-deplace') || !!JSON.parse(localStorage.getItem('signaler_pos_v1') || '{}')[location.origin + location.pathname])), dit + ' : « Remettre le bouton à sa place »');
+      await p.keyboard.press('Escape');
+      const f6 = await boite(p, '.sgn-fab');
+      ok(Math.abs(f6.x + f6.w - (w - 18)) <= 1 && Math.abs(f6.y + f6.h - (ht - 18)) <= 1 && !(await pastille(p)), dit + ' : revenu en bas à droite ; la fenêtre fermée sans rien y mettre ne laisse pas de brouillon');
+      // j) Signaler.oublier() : brouillon, liste et boîte noire effacés ; la clé reste.
+      await ouvrirAvecPhoto(p, toucher, 1);
+      await p.fill('.sgn-texte', 'À oublier');
+      await toucherEl(p, toucher, '[data-a="autre"]');
+      ok((await pastille(p)) === '1' && (await p.evaluate(() => window.Signaler._journal().length)) > 0, dit + ' : un brouillon en attente, une boîte noire pleine');
+      await p.evaluate(() => window.Signaler.oublier());
+      const apres = await p.evaluate(() => ({ b: sessionStorage.getItem('signaler_brouillon_v1'), j: window.Signaler._journal().length, n: window.Signaler._etat().captures.length, badge: getComputedStyle(document.querySelector('.sgn-badge')).display, cle: !!localStorage.getItem('signaler_cle_v1') }));
+      ok(!apres.b && !apres.j && !apres.n && apres.badge === 'none' && apres.cle && !(await pastille(p)), dit + ' : Signaler.oublier() efface le brouillon, la liste gardée et la boîte noire ; la clé reste');
+      const vraies = x.erreursPage.filter((e) => !e.includes(ERREUR_DEMO));
+      ok(!pbs.length && !vraies.length, dit + ' : rien ne déborde, pas plus de 3 boutons par rangée, ni italique ni émoji' + (pbs.length ? ' — ' + [...new Set(pbs)].join(' ; ') : '') + (vraies.length ? ' — ' + vraies.join(' ; ') : ''));
+      await x.ctx.close();
+    }
+  }
+  // Mouvement réduit : rien ne tourne ni ne pulse, l'anneau plein dit quand même « je travaille ».
+  remettre();
+  const rm = await page({ width: 412, height: 915 }, { mouvement: 'reduce' });
+  await rm.p.waitForSelector('.sgn-fab');
+  await rm.p.evaluate(() => { window.__h2cDelai = 1200; });
+  await rm.p.click('.sgn-fab');
+  await rm.p.waitForSelector('.sgn-fab.sgn-occupe', { timeout: 3000 });
+  await rm.p.waitForTimeout(300);
+  const calme = await rm.p.evaluate(() => { const f = document.querySelector('.sgn-fab'), st = (s) => getComputedStyle(f.querySelector(s)); return [st('.sgn-anneau').opacity, st('.sgn-anneau').animationName, st('.sgn-onde').opacity, st('.sgn-etoile').animationName].join(' '); });
+  ok(calme === '1 none 0 none', 'prefers-reduced-motion : pendant la photo, l’anneau est là mais immobile, pas d’onde (' + calme + ')');
+  await capture(rm.p, 'rond-412-mouvement-reduit.png');
+  await rm.ctx.close();
   console.log('  captures : ' + CAPTURES);
 } catch (e) { ko++; console.log('  ✗ exception : ' + (e && e.stack || e)); }
 finally { await navigateur.close(); site.close(); relais.close(); }
