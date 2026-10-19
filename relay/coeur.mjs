@@ -1150,9 +1150,15 @@ export function nomsDesCles(liste) {
 // ——— LES CLÉS D'ÉQUIPE CRÉÉES DEPUIS LE PUPITRE (POST /auth/cle/nouvelle) ———
 // Le propriétaire touche « Nouvelle clé » et pose le doigt : le relais tire une clé neuve et ne range que son EMPREINTE (sha256)
 // sous « cle:<nom> » : { h, creeLe, envRevoque, app }. `envRevoque` = l'empreinte de la clé que CLES lui donnait à cet instant
-// (de chacune, s'il en a plusieurs ; null s'il n'en a pas) : celle-là ne marche plus. Une 2e création remplace la 1re. Si le
-// propriétaire change ensuite CLES au Terminal (une autre clé pour ce nom), la clé de CLES compte de nouveau : le Terminal reste
-// toujours le secours. Seule une personne présente dans CLES peut avoir une clé rangée : retirer quelqu'un de CLES retire tout.
+// (de chacune, s'il en a plusieurs ; null s'il n'en a pas). Une 2e création remplace la 1re.
+// LA CLÉ LA PLUS RÉCENTE EST LA SEULE VALABLE, qu'elle vienne du pupitre ou du Terminal (le Terminal est le secours quand une clé a
+// fui : il doit gagner s'il est plus récent). Pour un nom de CLES, avec r = « cle:<nom> » et k = sa clé (ses clés) dans CLES :
+//   - pas de r : seule k vaut (comme avant le pupitre) ;
+//   - r et r.envRevoque = l'empreinte de k (CLES n'a pas bougé depuis la création au pupitre) : seule la clé rangée vaut, k est
+//     refusée ;
+//   - r et r.envRevoque ≠ l'empreinte de k (CLES changé au Terminal APRÈS la création au pupitre) : seule k vaut, la clé rangée est
+//     périmée (une nouvelle création au pupitre la rend de nouveau la seule valable).
+// Seule une personne présente dans CLES peut avoir une clé rangée : retirer quelqu'un de CLES retire tout.
 // Workers KV met jusqu'à 60 s à propager une écriture d'un lieu à l'autre : la nouvelle clé (et le refus de l'ancienne) vaut
 // partout dans la minute, rien à faire de plus.
 export const cleCle = (qui) => 'cle:' + qui;
@@ -1181,23 +1187,29 @@ function cleRangeeLue(ranges, nom) {
   if (!x || typeof x !== 'object' || x.retire || typeof x.h !== 'string' || !EMPREINTE_RX.test(x.h)) return null;
   return { h: x.h, revoques: [].concat(x.envRevoque == null ? [] : x.envRevoque).filter((e) => typeof e === 'string' && EMPREINTE_RX.test(e)) };
 }
+// Les mêmes empreintes, dans n'importe quel ordre (CLES n'a pas bougé pour ce nom depuis la création au pupitre).
+function memesEmpreintes(a, b) {
+  const x = [...new Set(a)].sort(), y = [...new Set(b)].sort();
+  return x.length === y.length && x.every((e, i) => egaux(e, y[i]));
+}
 // La clé présentée (X-Signaler-Cle) est-elle acceptée, et pour qui ? `ranges` = { <nom>: ce qui est lu sous « cle:<nom> » } pour
-// les noms de nomsDesCles(liste). D'abord une clé rangée (comparée en temps constant, tous les noms passés en revue) ; sinon la clé
-// de CLES, sauf si une clé rangée pour ce nom l'a remplacée (son empreinte est dans `envRevoque`). Rend { ok, nom, par:
-// 'rangee'|'cles' } ou { ok: false } ({ ok: false, remplacee: true } pour une clé de CLES remplacée depuis le pupitre).
+// les noms de nomsDesCles(liste). Pour chaque nom, la seule clé valable est la plus récente (voir plus haut) ; tous les noms sont
+// passés en revue, comparaisons en temps constant ; le premier nom qui accepte la clé l'emporte (comme verifierCle). Rend { ok, nom,
+// par: 'rangee'|'cles' }, ou { ok: false } avec, pour une clé connue mais plus valable, remplacee: true (la clé de CLES, remplacée
+// depuis le pupitre) ou perimee: true (la clé du pupitre, CLES ayant changé depuis).
 export async function deciderCle(cle, liste, ranges) {
   cle = String(cle || '').trim();
   if (cle.length < 16) return { ok: false };
   const h = await sha256Hex(cle);
-  let trouve = null;
+  let trouve = null, refus = null;
   for (const nom of nomsDesCles(liste)) {
-    const e = cleRangeeLue(ranges, nom);
-    if (e && egaux(h, e.h) && !trouve) trouve = nom;
+    const hk = await Promise.all(clesDuNom(liste, nom).map(sha256Hex));
+    const r = cleRangeeLue(ranges, nom);
+    const estK = hk.some((x) => egaux(h, x)), estR = !!r && egaux(h, r.h);
+    const rangeeValable = !!r && memesEmpreintes(r.revoques, hk);
+    if (rangeeValable ? estR : estK) { if (!trouve) trouve = { nom: nom, par: rangeeValable ? 'rangee' : 'cles' }; }
+    else if (!refus && (estK || estR)) refus = estK ? { ok: false, remplacee: true } : { ok: false, perimee: true };
   }
-  if (trouve) return { ok: true, nom: trouve, par: 'rangee' };
-  const v = verifierCle(cle, liste);
-  if (!v.ok) return { ok: false };
-  const e = cleRangeeLue(ranges, v.nom);
-  if (e && e.revoques.some((x) => egaux(h, x))) return { ok: false, remplacee: true };
-  return { ok: true, nom: v.nom, par: 'cles' };
+  if (trouve) return { ok: true, nom: trouve.nom, par: trouve.par };
+  return refus || { ok: false };
 }

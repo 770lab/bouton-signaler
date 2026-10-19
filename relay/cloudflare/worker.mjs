@@ -10,7 +10,9 @@
 //           ROUTINE_JETON le jeton de CETTE routine (sk-ant-oat01-…)
 //           ROUTINE_URL_2 / ROUTINE_JETON_2 (facultatifs) la routine du second abonnement Claude, prise quand le premier refuse
 //           CLES          les clés d'équipe : « marie:<clé>,paul:<clé> » (16 caractères au moins chacune) ; c'est aussi la liste
-//                         de l'équipe : une clé créée depuis le pupitre (/auth/cle/nouvelle) remplace celle de CLES pour ce nom
+//                         de l'équipe. Pour chaque nom, seule la clé la plus RÉCENTE vaut : celle créée depuis le pupitre
+//                         (/auth/cle/nouvelle) remplace celle de CLES ; changer ensuite CLES pour ce nom (au Terminal) remplace
+//                         à son tour la clé du pupitre
 //           SESSION_SECRET (facultatif) 32 caractères aléatoires au moins : la connexion par empreinte (sans lui, les routes /auth
 //                         répondent 503 et tout le reste marche comme avant)
 //   stockage (facultatif) : R2 PIECES, ou Workers KV PIECES_KV (inclus dans l'offre gratuite, sans abonnement R2 ; fichiers
@@ -128,9 +130,9 @@ async function sessionValide(env, jeton) {
   return { ok: true, p: s.p, appareil: ap };
 }
 
-// Une clé d'équipe (X-Signaler-Cle) : celle créée depuis le pupitre (rangée sous « cle:<nom> », son empreinte seulement) ou celle
-// de CLES, sauf si une clé créée depuis le pupitre l'a remplacée (C.deciderCle). « cle:<nom> » est lu une fois par requête, pour
-// chaque nom de CLES seulement. Workers KV peut mettre jusqu'à 60 s à propager une nouvelle clé d'un lieu à l'autre : pendant ce
+// Une clé d'équipe (X-Signaler-Cle) : pour chaque nom de CLES, seule la plus RÉCENTE vaut (C.deciderCle) : la clé créée depuis le
+// pupitre (rangée sous « cle:<nom> », son empreinte seulement) tant que CLES n'a pas changé pour ce nom depuis, sinon celle de CLES
+// (le Terminal, plus récent, l'emporte). « cle:<nom> » est lu une fois par requête, pour chaque nom de CLES seulement. Workers KV peut mettre jusqu'à 60 s à propager une nouvelle clé d'un lieu à l'autre : pendant ce
 // temps, ailleurs, l'ancienne marche encore et la nouvelle pas encore (rien à faire, la page le dit). Sans stockage : CLES seul,
 // comme avant. Stockage en panne : l'erreur remonte (500), plutôt que d'accepter une clé peut-être remplacée.
 async function cleEquipe(env, cle) {
@@ -581,7 +583,7 @@ async function verifierRoute(req, env, cors) {
 // session à empreinte de moins de 5 minutes, comme « valider » : la clé d'équipe seule ne suffit pas (une clé volée ne doit pas
 // pouvoir en créer une autre et enfermer le propriétaire dehors). La clé est tirée ici et rendue UNE fois (no-store) ; seule son
 // empreinte est rangée sous « cle:<nom> » (sans fin), avec celle de la clé de CLES qu'elle remplace (C.nouvelleCleRangee) ; elle
-// remplace aussi celle créée avant. Ni la clé ni son empreinte ne vont au journal ; une panne n'y laisse que la route.
+// remplace aussi celle créée avant, et redevient la seule valable même si CLES avait changé au Terminal entre-temps. Ni la clé ni son empreinte ne vont au journal ; une panne n'y laisse que la route.
 async function nouvelleCleRoute(req, env, st, cors) {
   if (!C.origineAutorisee(req.headers.get('Origin'), env.ORIGINES)) return json(NON_AUTORISEE, 403, cors);
   const b = await petitCorps(req, C.LIMITES.etatOctets, true);

@@ -113,11 +113,16 @@ Ne recopie pas les clés dans le dépôt ni dans ta réponse finale : donne-les 
 **Une nouvelle clé sans Terminal** (relais avec stockage et `SESSION_SECRET`) : dans le pupitre, carte « Mes appareils »,
 « Nouvelle clé » puis l'empreinte. Le relais (`POST /auth/cle/nouvelle`) exige une empreinte de moins de 5 minutes (une clé
 d'équipe seule ne suffit pas : une clé volée ne peut pas en créer une autre), tire une clé de 24 caractères, la rend UNE fois et
-n'en range que l'empreinte sous `cle:<nom>`. Dès lors, la clé que `CLES` donnait à cette personne ne marche plus ; une nouvelle
-création remplace la précédente. Workers KV met jusqu'à une minute à le savoir partout. Le Terminal reste le secours : changer
-`CLES` (une autre clé pour ce nom) rend la clé de `CLES` valable de nouveau, à côté de celle du pupitre. Retirer la personne de
-`CLES` retire tout, sa clé du pupitre comprise (la remettre sous le même nom la rend valable de nouveau). Pour annuler seulement
-la clé du pupitre : en créer une autre, ou effacer `cle:<nom>` (`npx wrangler@4 kv key delete --binding PIECES_KV --remote "cle:<nom>"`).
+n'en range que l'empreinte sous `cle:<nom>`, avec celle de la clé que `CLES` donnait alors à cette personne.
+**Pour chaque personne, seule la clé la plus RÉCENTE vaut**, qu'elle vienne du pupitre ou du Terminal :
+- créée au pupitre : la clé de `CLES` ne marche plus ; une nouvelle création remplace la précédente ;
+- `CLES` changé ensuite au Terminal (une autre clé pour ce nom, par exemple parce qu'une clé a fui) : c'est la clé de `CLES` qui
+  vaut, celle du pupitre ne marche plus ; une nouvelle création au pupitre redevient à son tour la seule valable.
+
+Workers KV met jusqu'à une minute à le savoir partout. Retirer la personne de `CLES` retire tout, sa clé du pupitre comprise (la
+remettre sous le même nom AVEC la même clé qu'au moment de la création rend la clé du pupitre valable de nouveau ; avec une autre
+clé, c'est celle-ci qui vaut). Pour annuler seulement la clé du pupitre et revenir à celle de `CLES` : effacer `cle:<nom>`
+(`npx wrangler@4 kv key delete --binding PIECES_KV --remote "cle:<nom>"`), ou changer `CLES` pour ce nom.
 
 ## 4. La routine Claude (sur le compte du propriétaire — c'est lui qui clique)
 

@@ -1503,7 +1503,7 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
 
 // ——— Une nouvelle clé d'équipe depuis le pupitre (POST /auth/cle/nouvelle) ———
 
-test('les clés créées depuis le pupitre (pur) : 24 caractères base64url, seule l’empreinte rangée ; la rangée d’abord, celle de CLES remplacée, CLES changé ensuite', async () => {
+test('les clés créées depuis le pupitre (pur) : 24 caractères base64url, seule l’empreinte rangée ; la plus récente seule valable (pupitre ou Terminal)', async () => {
   const tirees = new Set(Array.from({ length: 200 }, () => C.nouvelleCle()));
   assert.equal(tirees.size, 200, 'jamais deux fois la même');
   for (const k of tirees) { assert.match(k, /^[A-Za-z0-9_-]{24}$/); assert.match(k, C.CLE_RX); }
@@ -1524,16 +1524,37 @@ test('les clés créées depuis le pupitre (pur) : 24 caractères base64url, seu
   assert.deepEqual(await C.deciderCle(CLE_PAUL, CLES, ranges), { ok: true, nom: 'paul', par: 'cles' }, 'les autres : inchangés');
   assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, {}), { ok: true, nom: 'marie', par: 'cles' }, 'rien de rangé : CLES, comme avant');
   for (const k of [CLE_MARIE, CLE_PAUL]) assert.equal((await C.deciderCle(k, deux, { marie: e2 })).ok, false, 'toutes ses clés de CLES sont remplacées');
-  // CLES changé au Terminal (une autre clé pour marie) : celle-là compte ; la clé rangée aussi.
+  // CLES changé au Terminal APRÈS la création au pupitre (une autre clé pour marie) : la plus récente, celle de CLES, est la seule
+  // valable ; la clé du pupitre est périmée. Paul n'est pas touché.
   const AUTRE = 'Nv8kT3pQ6wZ1xR4m', CLES2 = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
   assert.deepEqual(await C.deciderCle(AUTRE, CLES2, ranges), { ok: true, nom: 'marie', par: 'cles' });
-  assert.deepEqual(await C.deciderCle(neuve, CLES2, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(neuve, CLES2, ranges), { ok: false, perimee: true }, 'la clé du pupitre, plus ancienne que CLES : refusée');
   assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES2, ranges), { ok: false }, 'plus dans CLES');
+  assert.deepEqual(await C.deciderCle(CLE_PAUL, CLES2, ranges), { ok: true, nom: 'paul', par: 'cles' });
+  // … puis une nouvelle clé au pupitre (elle remplace AUTRE) : elle redevient la seule valable.
+  const neuve2 = C.nouvelleCle(), e3 = await C.nouvelleCleRangee({ cle: neuve2, qui: 'marie', liste: CLES2, quand: 2000, app: app });
+  assert.equal(e3.envRevoque, await C.sha256Hex(AUTRE));
+  assert.deepEqual(await C.deciderCle(neuve2, CLES2, { marie: e3 }), { ok: true, nom: 'marie', par: 'rangee' });
+  assert.deepEqual(await C.deciderCle(AUTRE, CLES2, { marie: e3 }), { ok: false, remplacee: true });
+  assert.equal((await C.deciderCle(neuve, CLES2, { marie: e3 })).ok, false, 'la 1re du pupitre : toujours refusée');
+  // CLES remis à sa valeur du moment de la création : rien n'a changé depuis pour ce nom, la clé rangée vaut de nouveau, seule.
+  assert.deepEqual(await C.deciderCle(neuve, CLES, ranges), { ok: true, nom: 'marie', par: 'rangee' });
+  // Plusieurs clés de marie dans CLES : une seule retirée au Terminal = CLES a changé, ses clés restantes valent, pas la rangée.
+  const une = 'marie:' + CLE_MARIE;
+  assert.deepEqual(await C.deciderCle(CLE_MARIE, une, { marie: e2 }), { ok: true, nom: 'marie', par: 'cles' });
+  assert.deepEqual(await C.deciderCle(neuve, une, { marie: e2 }), { ok: false, perimee: true });
+  assert.deepEqual(await C.deciderCle(neuve, 'marie:' + CLE_PAUL + ',marie:' + CLE_MARIE, { marie: e2 }), { ok: true, nom: 'marie', par: 'rangee' }, 'même ensemble, autre ordre : inchangé');
   // Retirée de CLES : sa clé rangée ne vaut plus rien (elle n'est même pas lue).
   assert.deepEqual(await C.deciderCle(neuve, 'paul:' + CLE_PAUL, ranges), { ok: false });
   // Un enregistrement illisible ou une pierre tombale : comme absent.
   for (const x of [null, { retire: true }, { h: 'pas-une-empreinte', envRevoque: e.envRevoque }, 'texte', 42, []])
     assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, { marie: x }), { ok: true, nom: 'marie', par: 'cles' }, JSON.stringify(x));
+  // Une empreinte de l'ancienne illisible : on ne peut pas dire que CLES n'a pas bougé, c'est CLES qui vaut (le secours du Terminal).
+  for (const r of [null, 'pas-une-empreinte', [], 42]) {
+    const x = Object.assign({}, e, { envRevoque: r });
+    assert.deepEqual(await C.deciderCle(CLE_MARIE, CLES, { marie: x }), { ok: true, nom: 'marie', par: 'cles' }, JSON.stringify(r));
+    assert.deepEqual(await C.deciderCle(neuve, CLES, { marie: x }), { ok: false, perimee: true }, JSON.stringify(r));
+  }
   assert.equal((await C.deciderCle(neuve, CLES, Object.create(ranges))).ok, false, 'seules les entrées propres sont lues');
   // Trop courte, vide : refusée.
   for (const k of ['', null, undefined, 'court', neuve.slice(0, 15)]) assert.deepEqual(await C.deciderCle(k, CLES, ranges), { ok: false }, String(k));
@@ -1577,7 +1598,7 @@ test('POST /auth/cle/nouvelle : empreinte de moins de 5 minutes exigée (la clé
   assert.equal(pre.headers.get('Access-Control-Allow-Origin'), ORIGINE_770); assert.match(pre.headers.get('Access-Control-Allow-Headers'), /Authorization/);
 });
 
-test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout ; une 2e remplace la 1re ; CLES changé au Terminal reprend la main ; jamais en clair', async () => {
+test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout ; une 2e remplace la 1re ; CLES changé au Terminal reprend la main (seul) ; jamais en clair', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7), journal = [], log = console.log;
   const { j: ins } = await inscrire(env, A);
   const creer = async () => {
@@ -1587,7 +1608,7 @@ test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout 
   const statut = async (cle) => (await appel(env, R, 'GET', '/demandes', { cle: cle })).status;
   const sha = C.sha256Hex;
   const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
-  let un, deux;
+  let un, deux, trois;
   console.log = (...x) => journal.push(x.join(' '));
   try {
     // Créée (corps vide permis) : rendue une fois, no-store ; seule son empreinte est rangée, sans fin, avec celle de l'ancienne.
@@ -1628,30 +1649,48 @@ test('POST /auth/cle/nouvelle : la nouvelle clé remplace celle de CLES partout 
     assert.equal(await statut(un.j.cle), 401); assert.equal(await statut(deux.j.cle), 200); assert.equal(await statut(CLE_MARIE), 401);
     assert.equal(JSON.parse(env.PIECES_KV.objets.get('cle:marie').v).envRevoque, await sha(CLE_MARIE));
 
-    // Le propriétaire change CLES au Terminal (une autre clé pour marie) : celle-là compte de nouveau, sous son nom.
+    // Le propriétaire change CLES au Terminal (une autre clé pour marie, la clé du pupitre a fui) : la plus récente, celle de CLES,
+    // est la seule valable, sous son nom ; la clé du pupitre ne marche plus nulle part.
     env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
     assert.equal(await statut(AUTRE), 200);
     assert.deepEqual((await (await appel(env, null, 'GET', '/demandes', { cle: AUTRE })).json()).demandes.map((d) => d.id), [sig.ref]);
-    assert.equal(await statut(CLE_MARIE), 401); assert.equal(await statut(deux.j.cle), 200, 'la clé créée au pupitre vaut tant que marie est dans CLES');
-    // Revenir à l'ancienne valeur de CLES : l'ancienne clé reste remplacée.
+    assert.equal(await statut(CLE_MARIE), 401); assert.equal(await statut(deux.j.cle), 401, 'la clé du pupitre, plus ancienne que CLES : refusée');
+    assert.equal((await appel(env, R, 'POST', '/signaler', { cle: deux.j.cle, corps: signalement() })).status, 401);
+    assert.equal((await appel(env, null, 'POST', '/etat', { origine: null, cle: deux.j.cle, corps: { actif: false } })).status, 401);
+    assert.equal((await inscrire(env, await appareil(-7), { cle: deux.j.cle })).rep.status, 401, 'elle n’inscrit plus rien');
+    assert.equal(await statut(CLE_PAUL), 200, 'paul : inchangé');
+    // … puis une nouvelle clé au pupitre : elle redevient la seule valable (AUTRE refusée à son tour).
+    trois = await creer();
+    assert.equal(trois.rep.status, 200);
+    assert.equal(await statut(trois.j.cle), 200); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(deux.j.cle), 401);
+    assert.equal(JSON.parse(env.PIECES_KV.objets.get('cle:marie').v).envRevoque, await sha(AUTRE));
+    // Revenir à une valeur plus ancienne de CLES (CLE_MARIE) : CLES a changé depuis la dernière création, c'est elle qui vaut.
     env.CLES = 'marie:' + CLE_MARIE + ',paul:' + CLE_PAUL;
-    assert.equal(await statut(CLE_MARIE), 401);
+    assert.equal(await statut(CLE_MARIE), 200); assert.equal(await statut(trois.j.cle), 401);
+    // CLES remis à la valeur du moment de la création (AUTRE) : rien n'a changé depuis pour marie, la clé du pupitre vaut, seule.
+    env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(trois.j.cle), 200); assert.equal(await statut(AUTRE), 401);
     // Marie retirée de CLES : sa clé rangée ne vaut plus rien, sa session non plus.
     env.CLES = 'paul:' + CLE_PAUL;
-    assert.equal(await statut(deux.j.cle), 401); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(CLE_PAUL), 200);
+    assert.equal(await statut(trois.j.cle), 401); assert.equal(await statut(AUTRE), 401); assert.equal(await statut(CLE_PAUL), 200);
     assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(ins.session) })).status, 401);
-    // Remise dans CLES sous le même nom : sa clé du pupitre revient avec elle (INSTALL.md le dit).
+    // Remise dans CLES sous le même nom et la même clé qu'à la création : sa clé du pupitre revient avec elle (INSTALL.md le dit).
     env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
-    assert.equal(await statut(deux.j.cle), 200);
+    assert.equal(await statut(trois.j.cle), 200);
+    // Remise dans CLES sous le même nom avec une AUTRE clé : CLES a changé depuis, c'est elle qui vaut, pas la clé du pupitre.
+    const NEUF = 'Qw7rT2yU9iO4pA1s';
+    env.CLES = 'marie:' + NEUF + ',paul:' + CLE_PAUL;
+    assert.equal(await statut(NEUF), 200); assert.equal(await statut(trois.j.cle), 401);
   } finally { console.log = log; }
 
   // Le journal : une ligne « [cle] » par création, avec le nom seulement ; ni les clés ni leurs empreintes.
-  assert.deepEqual(journal.filter((l) => l.startsWith('[cle]')), ['[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}']);
+  assert.deepEqual(journal.filter((l) => l.startsWith('[cle]')), ['[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}', '[cle] {"qui":"marie"}']);
   const tout = journal.join('\n');
-  for (const secret of [un.j.cle, deux.j.cle, await sha(un.j.cle), await sha(deux.j.cle), CLE_MARIE, AUTRE, CLE_PAUL]) assert.ok(!tout.includes(secret), secret);
+  for (const secret of [un.j.cle, deux.j.cle, trois.j.cle, await sha(un.j.cle), await sha(deux.j.cle), await sha(trois.j.cle), CLE_MARIE, AUTRE, CLE_PAUL, 'Qw7rT2yU9iO4pA1s'])
+    assert.ok(!tout.includes(secret), secret);
   // Le stockage : aucune clé en clair, nulle part (ni sous « cle: », ni dans une demande, un appareil…).
   const texte = (v) => (typeof v === 'string' ? v : Buffer.from(v instanceof ArrayBuffer ? new Uint8Array(v) : v).toString('latin1'));
-  for (const [k, x] of env.PIECES_KV.objets) for (const cle of [un.j.cle, deux.j.cle]) assert.ok(!texte(x.v).includes(cle) && !k.includes(cle), k);
+  for (const [k, x] of env.PIECES_KV.objets) for (const cle of [un.j.cle, deux.j.cle, trois.j.cle]) assert.ok(!texte(x.v).includes(cle) && !k.includes(cle), k);
 });
 
 test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CLES seule, comme avant', async () => {
