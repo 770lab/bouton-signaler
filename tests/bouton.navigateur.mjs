@@ -474,7 +474,7 @@ try {
   await e.p.evaluate(() => fetch('http://127.0.0.1:9/mac/robots').catch(() => null));
   await e.p.waitForTimeout(600);
   const muette = await e.p.evaluate(() => ({ bulle: !!document.querySelector('.sgn-bulle:not([hidden])') && getComputedStyle(document.querySelector('.sgn-bulle')).display !== 'none',
-    rouge: document.querySelector('.sgn-fab').classList.contains('sgn-alerte'), journal: window.Signaler._journal() }));
+    rouge: document.querySelector('.sgn-fab').classList.contains('sgn-alerte'), journal: JSON.stringify(window.Signaler._journal()) }));
   await e.p.evaluate(() => fetch('http://127.0.0.1:1/autre').catch(() => null));
   const parle = await e.p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 }).then(() => true, () => false);
   ok(!muette.bulle && !muette.rouge && /127\.0\.0\.1:9\/mac\/robots/.test(muette.journal) && parle,
