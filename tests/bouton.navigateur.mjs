@@ -5,6 +5,8 @@
 //   node tests/bouton.navigateur.mjs        (Playwright doit être installé : npm i -D playwright, ou global via NODE_PATH)
 //   SIGNALER_CAPTURES=/un/dossier            où ranger les captures d'écran (défaut : tests/.cache/)
 // html2canvas : servi depuis tests/.cache/ s'il y est (le navigateur du test ne va pas sur Internet), sinon depuis cdnjs.
+// Les pages des projets (http://770lab.com:<port>/home/, /home/robots.html, /havroutia/) : le navigateur envoie 770lab.com sur
+// 127.0.0.1 (--host-resolver-rules), le site y sert la démo ; le bouton y trouve son projet d'après l'adresse, comme en ligne.
 import http from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
@@ -24,20 +26,31 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Le site de démonstration (la racine du dépôt, en statique).
+// ?dataProjet=<id> : la démo servie avec l'attribut data-projet sur la balise du bouton (écrit ici, par le site : une page
+// fournie par Playwright n'aurait pas d'adresse IP, et Chrome lui refuserait le bouton et le relais, servis sur 127.0.0.1).
+const DEMO = join(RACINE, 'demo', 'index.html');
 const site = http.createServer((req, res) => {
-  const p = join(RACINE, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+  const u = new URL(req.url, 'http://x'), chemin = decodeURIComponent(u.pathname), attribut = u.searchParams.get('dataProjet');
+  if (/^\/(home|havroutia)/i.test(chemin) || (attribut && chemin === '/demo/index.html')) {
+    let html = readFileSync(DEMO, 'utf8');
+    if (attribut) html = html.replace('<script src="../widget/signaler.js"', '<script src="../widget/signaler.js" data-projet="' + attribut.replace(/[^a-z0-9_-]/gi, '') + '"');
+    res.writeHead(200, { 'Content-Type': TYPES['.html'] }); return res.end(html);
+  }
+  const p = join(RACINE, chemin);
   if (!p.startsWith(RACINE) || !existsSync(p)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }); res.end(readFileSync(p));
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const ORIGINE = 'http://127.0.0.1:' + site.address().port;
+const LAB = 'http://770lab.com:' + site.address().port;   // Home, le pupitre, HavroutIA (le même site, sous leur adresse)
+const PERMISES = new Set([ORIGINE, LAB]);
 
 // Le relais : le vrai code du Worker pour POST /signaler, derrière un petit serveur Node.
 const CLE = 'k7Qe9mWz4Lp2Xr8T', CLE_PAUL = 'Zr2mP8vQ5nB3wX6y';   // clés de test, sans valeur ailleurs
 const NOMS = { [CLE]: 'marie', [CLE_PAUL]: 'paul' };
 const objets = new Map(), appels = [];
 const texteDe = (v) => (typeof v === 'string' ? v : new TextDecoder().decode(v instanceof ArrayBuffer ? new Uint8Array(v) : v));
-const env = { ORIGINES: ORIGINE, DEPOT: 'exemple/app', ROUTINE_URL: 'https://api.anthropic.com/v1/claude_code/routines/trig_01TEST/fire', ROUTINE_JETON: 'sk-ant-oat01-FAUX',
+const env = { ORIGINES: ORIGINE + ',' + LAB, DEPOT: 'exemple/app', ROUTINE_URL: 'https://api.anthropic.com/v1/claude_code/routines/trig_01TEST/fire', ROUTINE_JETON: 'sk-ant-oat01-FAUX',
   CLES: 'marie:' + CLE + ',paul:' + CLE_PAUL,
   PIECES: { put: async (k, v, o) => { objets.set(k, { v, o }); },
     get: async (k) => (objets.has(k) ? { body: objets.get(k).v, httpMetadata: (objets.get(k).o || {}).httpMetadata, text: async () => texteDe(objets.get(k).v) } : null) } };
@@ -50,6 +63,19 @@ const fausseRoutine = async (url, init) => { appels.push(JSON.parse(init.body));
 // faux.demandes : 'normal' | 'sans-stockage' | 'injoignable' (connexion coupée) | 'interdit' (403) | 'erreur' (500)
 //   | 'absent' (vieux relais, d'avant « Mes demandes » : 404 sans CORS, comme le relais en ligne le 19/10)
 // faux.coupe : POST /signaler répond « coupé depuis le pupitre »
+// faux.projets : { <id>: false } = l'interrupteur de ce projet coupé (les autres activés) ; GET /etat rend tous les projets, et
+//   avec ?projet=<id> « projet » et « effectif » (le général ET ce projet) ; un id inconnu : 400 « projet inconnu ».
+//   POST /signaler d'une page d'un projet coupé : « coupé » (le projet d'après contexte.url, comme le relais).
+// faux.etatVieux : relais d'avant les projets (il ne lit pas ?projet=, ne dit ni « projets » ni « effectif »)
+// faux.requetesEtat : le projet demandé à chaque GET /etat (null : sans ?projet=)
+const PROJETS = ['home', 'pupitre', 'havroutia', 'avinou', 'koulam'];
+// La règle du contrat (une copie ici : le test ne lit pas le code du bouton pour vérifier le bouton).
+function projetDeLaPage(url) {
+  let u; try { u = new URL(String(url || '')); } catch (e) { return null; }
+  const hote = u.hostname.toLowerCase().replace(/^www\./, ''), c = u.pathname.toLowerCase();
+  if (hote === '770lab.com') return c.startsWith('/home/robots') ? 'pupitre' : c.startsWith('/home') ? 'home' : c.startsWith('/havroutia') ? 'havroutia' : null;
+  return hote === 'avinou-malkenou.web.app' ? 'avinou' : hote === 'koulam.app' ? 'koulam' : null;
+}
 const T0 = Date.now();
 const LONG = 'Sur la page des cartes, quand on ouvre une carte puis qu’on revient en arrière, la liste remonte tout en haut et on perd sa place. '
   + 'Il faudrait que la liste garde la position, comme sur le téléphone, et que la carte ouverte reste en surbrillance un instant. '
@@ -78,8 +104,11 @@ function demandesDeMarie() {
       liens: ['https://770lab.com/home/'], resume: 'Corrigé et en ligne.' }),
   ];
 }
-const faux = { etat: 'on', etatOuvert: false, coupe: false, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [], entetesEtat: null };
-function remettre() { Object.assign(faux, { etat: 'on', etatOuvert: false, coupe: false, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [] }); }
+const faux = { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [],
+  entetesEtat: null, requetesEtat: [] };
+function remettre() {
+  Object.assign(faux, { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [], requetesEtat: [] });
+}
 remettre();
 const publique = (x) => { const { retourHash, texteRoutine, ...p } = x; return p; };
 const RENVOI_RX = /^\/demandes\/([0-9a-f]{12})\/renvoyer$/;
@@ -88,8 +117,8 @@ const relais = http.createServer(async (req, res) => {
   const morceaux = []; for await (const m of req) morceaux.push(m);
   const corps = Buffer.concat(morceaux);
   const u = new URL(req.url, 'http://x'), origine = req.headers.origin || '';
-  const permise = origine === ORIGINE;
-  const cors = permise ? { 'Access-Control-Allow-Origin': ORIGINE, 'Vary': 'Origin' } : { 'Vary': 'Origin' };
+  const permise = PERMISES.has(origine);
+  const cors = permise ? { 'Access-Control-Allow-Origin': origine, 'Vary': 'Origin' } : { 'Vary': 'Origin' };
   const repondre = (statut, o, entetes) => {
     if (res.destroyed || res.writableEnded) return;
     res.writeHead(statut, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, entetes || cors));
@@ -102,11 +131,20 @@ const relais = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && u.pathname === '/etat') {
     faux.appelsEtat++; faux.entetesEtat = req.headers;
+    const pq = u.searchParams.get('projet'); faux.requetesEtat.push(pq);
     if (faux.etat === 'absent') { res.writeHead(404); return res.end('introuvable'); }
     const ce = faux.etatOuvert ? { 'Access-Control-Allow-Origin': '*', 'Vary': 'Origin' } : cors, plus = faux.etatOuvert ? { origine: permise } : {};
     if (faux.etat === 'erreur') return repondre(500, { ok: false }, ce);
     if (faux.etat === 'lent') { await attendre(6000); return repondre(200, { ok: true, actif: false, depuis: T0, par: 'marie', ...plus }, ce); }
-    return repondre(200, Object.assign(faux.etat === 'off' ? { ok: true, actif: false, depuis: T0, par: 'marie' } : { ok: true, actif: true, depuis: null, par: null }, plus), ce);
+    const coupeLe = { actif: false, depuis: T0, par: 'marie' }, allume = { actif: true, depuis: null, par: null };
+    const r = Object.assign({ ok: true }, faux.etat === 'off' ? coupeLe : allume, plus);
+    if (faux.etatVieux) return repondre(200, r, ce);
+    r.projets = Object.fromEntries(PROJETS.map((id) => [id, faux.projets[id] === false ? coupeLe : allume]));
+    if (pq !== null) {
+      if (!PROJETS.includes(pq)) return repondre(400, { ok: false, erreur: 'projet inconnu' }, ce);
+      Object.assign(r, { projet: pq, effectif: r.actif && r.projets[pq].actif });
+    }
+    return repondre(200, r, ce);
   }
   if (req.method === 'GET' && u.pathname === '/demandes') {
     faux.appelsDemandes++;
@@ -131,8 +169,9 @@ const relais = http.createServer(async (req, res) => {
     Object.assign(d, { etat: 'envoyee', sessionUrl: 'https://claude.ai/code/session_01RENVOI', majLeMs: Date.now(), retourHash: 'e'.repeat(64) }); delete d.erreur;
     return repondre(200, { ok: true, demande: publique(d) });
   }
-  if (req.method === 'POST' && u.pathname === '/signaler' && faux.coupe && permise && qui) {
-    return repondre(403, { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' });
+  if (req.method === 'POST' && u.pathname === '/signaler' && permise && qui) {
+    let pj = null; try { pj = projetDeLaPage(JSON.parse(texteDe(corps)).contexte.url); } catch (e) {}
+    if (faux.coupe || (pj && faux.projets[pj] === false)) return repondre(403, { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' });
   }
   const r = new Request('http://127.0.0.1' + req.url, { method: req.method, headers: req.headers, body: req.method === 'POST' ? corps : undefined });
   const rep = await signaler(r, env, { fetch: fausseRoutine, attendre: async () => {} });
@@ -141,7 +180,7 @@ const relais = http.createServer(async (req, res) => {
 await new Promise((r) => relais.listen(0, '127.0.0.1', r));
 const RELAIS = 'http://127.0.0.1:' + relais.address().port;
 
-const navigateur = await chromium.launch();
+const navigateur = await chromium.launch({ args: ['--host-resolver-rules=MAP 770lab.com 127.0.0.1'] });
 const H2C = join(RACINE, 'tests', '.cache', 'html2canvas-1.4.1.min.js');
 async function page(taille, o = {}) {
   const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light' });
@@ -150,7 +189,10 @@ async function page(taille, o = {}) {
   const p = await ctx.newPage();
   if (existsSync(H2C)) await p.route('https://cdnjs.cloudflare.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: readFileSync(H2C, 'utf8') }));
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
-  await p.goto((o.origine || ORIGINE) + '/demo/index.html?relais=' + encodeURIComponent(o.relais || RELAIS));
+  // o.chemin : une autre page que la démo (/home/, /home/robots.html…) · o.projet : ?projet= (SignalerConfig.projet de la démo)
+  // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site)
+  await p.goto((o.origine || ORIGINE) + (o.chemin || '/demo/index.html') + '?relais=' + encodeURIComponent(o.relais || RELAIS)
+    + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : ''));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
@@ -370,7 +412,7 @@ try {
     ['c3d4e5f6a1b2', 'pas partie', 'HavroutIA', ['Ouvrir dans Claude', 'Voir la PR', 'Renvoyer']],
     ['d4e5f6a1b2c3', 'en cours', 'Avinou Malkenou', ['Ouvrir dans Claude']],
     ['9f8e7d6c5b4a', 'pas partie', 'Avinou Malkenou', ['Renvoyer']],
-    ['e5f6a1b2c3d4', 'en cours', 'koulam.app', []],
+    ['e5f6a1b2c3d4', 'en cours', 'KOULAM', []],
     ['f6a1b2c3d4e5', 'rien à faire', new URL(ORIGINE).host, []],
     ['0a1b2c3d4e5f', 'échec', 'Home', []],
     ['1a2b3c4d5e6f', 'en ligne', 'Home', ['Voir le lien']],
@@ -483,6 +525,11 @@ try {
       await capture(x.p, nom + '-demandes.png');
       await x.p.$eval('.sgn-boite', (el) => { el.scrollTop = el.scrollHeight; });
       await capture(x.p, nom + '-demandes-bas.png');
+      // Les demandes d'UN projet (le pupitre, ligne « Home ») : la puce du projet, seule sur sa ligne au-dessus des filtres.
+      await x.p.evaluate(() => window.Signaler.demandes({ projet: 'home', etat: 'toutes' }));
+      await x.p.waitForFunction(() => document.querySelector('.sgn-puce') && document.querySelectorAll('.sgn-carte').length === 3, null, { timeout: 5000 });
+      pbs = pbs.concat(await controler(x.p));
+      await capture(x.p, nom + '-projet.png');
       await x.p.keyboard.press('Escape');
       await x.p.click('.sgn-fab', { position: { x: 24, y: 30 } });
       await x.p.waitForSelector('.sgn-v img', { timeout: 15000 });
@@ -554,6 +601,171 @@ try {
     ok(q.erreursPage.length === 0, c.dit + ' : aucune erreur JavaScript');
     await q.ctx.close();
   }
+  console.log('9. Un interrupteur par projet (GET /etat?projet=), et les demandes d’un projet');
+  const SUR = { home: [LAB, '/home/'], pupitre: [LAB, '/home/robots.html'], havroutia: [LAB, '/havroutia/'], aucun: [ORIGINE, '/demo/index.html'] };
+  // Ouvre la page, attend que le bouton ait lu l'interrupteur, et dit si le rond paraît et quel projet il a demandé.
+  const essai = async (ou, o = {}) => {
+    const n = faux.requetesEtat.length;
+    const q = await page({ width: 412, height: 915 }, Object.assign({ origine: SUR[ou][0], chemin: SUR[ou][1] }, o));
+    for (let i = 0; i < 40 && faux.requetesEtat.length === n; i++) await attendre(50);
+    await q.p.waitForTimeout(700);
+    return { q, rond: !!(await q.p.$('.sgn-fab')), demandes: faux.requetesEtat.slice(n) };
+  };
+  remettre();
+  let q0 = await page({ width: 412, height: 915 });
+  const regle = await q0.p.evaluate(() => {
+    const S = window.Signaler, r = {};
+    for (const u of ['https://770lab.com/home/robots.html', 'https://770lab.com/home/robots', 'https://770lab.com/home/', 'https://770lab.com/home',
+      'https://www.770lab.com/HOME/journal', 'https://770lab.com/havroutia/recherche', 'https://avinou-malkenou.web.app/cartes', 'https://koulam.app/tehilim',
+      'https://770lab.com/', 'https://770lab.com/autre', 'https://exemple.fr/home/', 'pas une adresse', '']) r[u] = S.projetDeLaPage(u);
+    return { r, projets: S.projets.map((p) => p.id + '=' + p.nom).join(',') };
+  });
+  const REGLE = { 'https://770lab.com/home/robots.html': 'pupitre', 'https://770lab.com/home/robots': 'pupitre', 'https://770lab.com/home/': 'home', 'https://770lab.com/home': 'home',
+    'https://www.770lab.com/HOME/journal': 'home', 'https://770lab.com/havroutia/recherche': 'havroutia', 'https://avinou-malkenou.web.app/cartes': 'avinou',
+    'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
+  const fausses = Object.keys(REGLE).filter((u) => regle.r[u] !== REGLE[u]);
+  ok(!fausses.length, 'Signaler.projetDeLaPage : le projet d’une adresse, comme le relais' + (fausses.length ? ' — faux : ' + fausses.map((u) => u + ' → ' + regle.r[u]).join(' ; ') : ''));
+  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,koulam=KOULAM', 'Signaler.projets : les 5 projets, dans l’ordre du pupitre');
+  await q0.ctx.close();
+
+  remettre(); faux.projets.home = false;
+  let r9 = await essai('home');
+  ok(!r9.rond && r9.demandes.join() === 'home', 'Home coupé : sur 770lab.com/home/, le bouton demande GET /etat?projet=home et le rond ne paraît pas');
+  await capture(r9.q.p, 'projet-home-coupe.png');
+  // Rallumé depuis le pupitre : Signaler.montrer() (Home, après la connexion) le fait revenir sans recharger la page.
+  faux.projets.home = true;
+  await r9.q.p.evaluate(() => window.Signaler.montrer());
+  ok(!!(await r9.q.p.waitForSelector('.sgn-fab', { timeout: 3000 }).catch(() => null)) && faux.requetesEtat.slice(-1)[0] === 'home', 'Home rallumé : Signaler.montrer() redemande ?projet=home, le rond revient');
+  ok(!r9.q.erreursPage.length, 'aucune erreur JavaScript');
+  await r9.q.ctx.close();
+  faux.projets.home = false;
+  for (const [ou, dit] of [['pupitre', '770lab.com/home/robots.html (le pupitre)'], ['havroutia', '770lab.com/havroutia/ (HavroutIA)']]) {
+    r9 = await essai(ou);
+    ok(r9.rond && r9.demandes.join() === ou, 'Home coupé : sur ' + dit + ', GET /etat?projet=' + ou + ', le rond paraît');
+    if (ou === 'pupitre') await capture(r9.q.p, 'projet-pupitre-allume.png');
+    await r9.q.ctx.close();
+  }
+  r9 = await essai('aucun');
+  ok(r9.rond && r9.demandes.length === 1 && r9.demandes[0] === null, 'Home coupé : une page d’aucun projet demande GET /etat (sans ?projet=), le rond paraît');
+  await r9.q.ctx.close();
+  r9 = await essai('aucun', { projet: 'avinou' });
+  ok(r9.rond && r9.demandes.join() === 'avinou', 'SignalerConfig.projet = avinou (page sans projet d’après son adresse) : GET /etat?projet=avinou, le rond paraît');
+  await r9.q.ctx.close();
+  // Le réglage de la page l'emporte sur l'adresse.
+  r9 = await essai('home', { projet: 'havroutia' });
+  ok(r9.rond && r9.demandes.join() === 'havroutia', 'SignalerConfig.projet = havroutia sur 770lab.com/home/ (Home coupé) : c’est le réglage qui compte, le rond paraît');
+  await r9.q.ctx.close();
+  r9 = await essai('havroutia', { dataProjet: 'home' });
+  ok(!r9.rond && r9.demandes.join() === 'home', 'data-projet="home" sur 770lab.com/havroutia/ (Home coupé) : l’attribut l’emporte sur l’adresse, le rond ne paraît pas');
+  await r9.q.ctx.close();
+  r9 = await essai('aucun', { dataProjet: 'home', projet: 'havroutia' });
+  ok(!r9.rond && r9.demandes.join() === 'home', 'data-projet="home" et SignalerConfig.projet = havroutia : data-projet l’emporte (comme les autres réglages)');
+  await r9.q.ctx.close();
+
+  // Le général coupé : tout est caché, quel que soit le projet.
+  remettre(); faux.etat = 'off';
+  const caches = [];
+  for (const ou of ['home', 'pupitre', 'havroutia', 'aucun']) { r9 = await essai(ou); if (r9.rond) caches.push(ou); await r9.q.ctx.close(); }
+  ok(!caches.length, 'interrupteur général coupé (projets allumés) : le rond ne paraît nulle part' + (caches.length ? ' — visible : ' + caches.join(', ') : ''));
+  // Un projet que le relais ne connaît pas (400) : le bouton lit au moins le général.
+  for (const [g, rond] of [['on', true], ['off', false]]) {
+    remettre(); faux.etat = g;
+    r9 = await essai('aucun', { dataProjet: 'inconnu' });
+    ok(r9.rond === rond && r9.demandes.join() === 'inconnu,', 'projet inconnu du relais (400), général ' + (g === 'on' ? 'activé' : 'coupé') + ' : GET /etat sans projet, le rond ' + (rond ? 'paraît' : 'ne paraît pas'));
+    await r9.q.ctx.close();
+  }
+  // Un relais d'avant les projets : il ne lit pas ?projet=, son « actif » (le général) décide.
+  for (const [g, rond] of [['on', true], ['off', false]]) {
+    remettre(); faux.etatVieux = true; faux.etat = g;
+    r9 = await essai('home');
+    ok(r9.rond === rond, 'relais d’avant les projets, actif: ' + (g === 'on') + ' : le rond ' + (rond ? 'paraît' : 'ne paraît pas') + ' sur Home');
+    await r9.q.ctx.close();
+  }
+  // Coupé pendant que la page est ouverte : le relais refuse l'envoi (« coupe »), le rond disparaît.
+  remettre();
+  r9 = await essai('home', { cle: CLE });
+  await r9.q.p.click('.sgn-fab', { position: { x: 24, y: 30 } });
+  await r9.q.p.waitForSelector('.sgn-v img', { timeout: 15000 });
+  faux.projets.home = false;
+  await r9.q.p.fill('.sgn-texte', 'Essai pendant la coupure de Home');
+  const n9 = appels.length;
+  await r9.q.p.click('.sgn-envoyer');
+  await r9.q.p.waitForSelector('.sgn-etat.ko', { timeout: 15000 });
+  ok((await texte(r9.q.p, '.sgn-etat')) === 'Le bouton est coupé depuis le pupitre.' && !(await r9.q.p.$('.sgn-fab')) && appels.length === n9, 'Home coupé pendant que la page est ouverte : l’envoi est refusé, on le dit, le rond disparaît');
+  await r9.q.p.keyboard.press('Escape');
+  await r9.q.p.evaluate(() => window.Signaler.montrer());
+  await r9.q.p.waitForTimeout(1200);
+  ok(!(await r9.q.p.$('.sgn-fab')) && faux.requetesEtat.slice(-1)[0] === 'home', 'toujours coupé : Signaler.montrer() redemande ?projet=home et le rond reste caché');
+  ok(!r9.q.erreursPage.length, 'aucune erreur JavaScript');
+  await r9.q.ctx.close();
+
+  // Les demandes d'un projet : Signaler.demandes({ projet }) (le pupitre, une ligne par projet).
+  remettre();
+  // Une demande récente porte son projet (champ « projet » du relais) : il l'emporte sur l'adresse de sa page.
+  faux.base.marie.push({ id: '2b3c4d5e6f7a', qui: 'marie', type: 'idee', etat: 'rien', texte: 'Une idée pour la recherche.', projet: 'havroutia',
+    page: { url: ORIGINE + '/demo/index.html', titre: 'Démo' }, captures: 0, audio: false, creeLeMs: T0 - 2000 * 60000, majLeMs: T0 - 1999 * 60000, resume: 'Rien à faire.' });
+  const pr = await page({ width: 360, height: 780 }, { cle: CLE, init: () => {
+    window.__comptes = [];
+    window.addEventListener('signaler:demandes', (e) => window.__comptes.push(e.detail));
+  } });
+  await pr.p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
+  const det = await pr.p.evaluate(() => window.__comptes.slice(-1)[0]);
+  const parProjet = det && det.projets ? PROJETS.map((id) => id + ' ' + det.projets[id].aTraiter + '/' + det.projets[id].total).join(', ') : '';
+  ok(det && det.aTraiter === 4 && det.total === 10 && parProjet === 'home 1/3, pupitre 1/1, havroutia 1/2, avinou 1/2, koulam 0/1',
+    'l’événement « signaler:demandes » compte aussi par projet (à traiter / en tout) : ' + parProjet);
+  const puceEtFiltres = async () => pr.p.evaluate(() => {
+    const pc = document.querySelector('.sgn-puce'), f = document.querySelector('.sgn-filtres');
+    return { puce: pc ? pc.textContent.replace(/\s+/g, ' ').trim() : '', dessus: !!(pc && f && pc.getBoundingClientRect().bottom <= f.getBoundingClientRect().top),
+      filtres: [...document.querySelectorAll('.sgn-filtre')].map((x) => x.textContent.replace(/\s+/g, ' ').trim()).join(' | '),
+      actif: (document.querySelector('.sgn-filtre[aria-pressed="true"]') || {}).dataset?.v || '',
+      cartes: [...document.querySelectorAll('.sgn-carte')].map((c) => c.dataset.id + ' ' + c.querySelector('.sgn-carte-h').textContent.split(' · ').pop()) };
+  });
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'home' }));
+  await pr.p.waitForSelector('.sgn-carte');
+  let v9 = await puceEtFiltres();
+  ok(v9.puce === 'Projet : Home ×' && v9.dessus, 'Signaler.demandes({ projet: \'home\' }) : la puce « ' + v9.puce + ' », au-dessus des filtres');
+  ok(v9.filtres === 'Toutes 3 | À traiter 1 | En cours 0' && v9.actif === 'traiter' && v9.cartes.join() === 'b2c3d4e5f6a1 Home', 'les filtres comptent ce projet seulement (' + v9.filtres + '), sur « À traiter » puisqu’il y en a');
+  let pb9 = await controler(pr.p);
+  ok(!pb9.length, 'mise en page à 360 px avec la puce du projet' + (pb9.length ? ' : ' + pb9.join(' ; ') : ''));
+  await capture(pr.p, 'w-360-light-projet-traiter.png');
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'home', etat: 'toutes' }));
+  await pr.p.waitForFunction(() => document.querySelectorAll('.sgn-carte').length === 3);
+  v9 = await puceEtFiltres();
+  ok(v9.actif === 'toutes' && v9.cartes.join() === 'b2c3d4e5f6a1 Home,0a1b2c3d4e5f Home,1a2b3c4d5e6f Home', '{ projet: \'home\', etat: \'toutes\' } : les 3 demandes de Home');
+  await pr.p.click('.sgn-puce');
+  v9 = await puceEtFiltres();
+  ok(!v9.puce && v9.filtres === 'Toutes 10 | À traiter 4 | En cours 2' && v9.cartes.length === 10, 'toucher la puce la retire : toutes les demandes de tous les projets (' + v9.filtres + ')');
+  ok(await pr.p.evaluate(() => document.activeElement && document.activeElement.matches('.sgn-filtre[aria-pressed="true"]')), 'le focus passe sur le filtre choisi');
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'havroutia', etat: 'toutes' }));
+  await pr.p.waitForFunction(() => document.querySelectorAll('.sgn-carte').length === 2);
+  v9 = await puceEtFiltres();
+  ok(v9.puce === 'Projet : HavroutIA ×' && v9.cartes.join() === 'c3d4e5f6a1b2 HavroutIA,2b3c4d5e6f7a HavroutIA', 'HavroutIA : la demande de sa page, et celle dont le champ « projet » le dit (même faite ailleurs)');
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'KOULAM', etat: 'cours' }));
+  await pr.p.waitForFunction(() => /KOULAM/.test((document.querySelector('.sgn-puce') || {}).textContent || ''));
+  v9 = await puceEtFiltres();
+  ok(v9.puce === 'Projet : KOULAM ×' && v9.actif === 'cours' && v9.cartes.join() === 'e5f6a1b2c3d4 KOULAM', 'KOULAM (id en capitales accepté), « En cours » : sa demande d’avant, d’après l’adresse koulam.app');
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'zzz' }));
+  await pr.p.waitForFunction(() => /zzz/.test((document.querySelector('.sgn-puce') || {}).textContent || ''));
+  ok((await texte(pr.p, '.sgn-vide')) === 'Aucune demande pour ce projet.' && !(await pr.p.$('.sgn-filtres')), 'un projet sans demande : « Aucune demande pour ce projet. », la puce pour revenir à tous');
+  pb9 = await controler(pr.p);
+  ok(!pb9.length, 'mise en page à 360 px, projet sans demande' + (pb9.length ? ' : ' + pb9.join(' ; ') : ''));
+  await capture(pr.p, 'w-360-light-projet-vide.png');
+  await pr.p.click('.sgn-puce');
+  ok(!(await pr.p.$('.sgn-puce')) && (await pr.p.$$('.sgn-carte')).length > 0, 'la puce retirée, la liste de tous revient');
+  await pr.p.keyboard.press('Escape');
+  // Le nombre du rond compte tout ; la liste ouverte par lui (ou par « Mes demandes ») n'a pas de filtre de projet.
+  await pr.p.evaluate(() => window.Signaler.demandes({ projet: 'home' }));
+  await pr.p.waitForSelector('.sgn-puce');
+  await pr.p.keyboard.press('Escape');
+  await pr.p.click('.sgn-badge');
+  await pr.p.waitForSelector('.sgn-carte');
+  ok((await pr.p.textContent('.sgn-badge')) === '4' && !(await pr.p.$('.sgn-puce')) && (await pr.p.$$('.sgn-carte')).length === 4, 'le nombre du rond compte tous les projets (4), et ouvre la liste sans filtre de projet');
+  await pr.p.keyboard.press('Escape');
+  await pr.p.evaluate(() => window.Signaler.demandes('toutes'));
+  await pr.p.waitForSelector('.sgn-carte');
+  ok(!(await pr.p.$('.sgn-puce')), 'Signaler.demandes(\'toutes\') (le pupitre d’avant) : sans puce, comme avant');
+  ok(!pr.erreursPage.length, 'aucune erreur JavaScript');
+  await pr.ctx.close();
   console.log('  captures : ' + CAPTURES);
 } catch (e) { ko++; console.log('  ✗ exception : ' + (e && e.stack || e)); }
 finally { await navigateur.close(); site.close(); relais.close(); }

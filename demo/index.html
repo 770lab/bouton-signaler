@@ -9,6 +9,7 @@
     body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; }
     main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
     .carte { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin: 16px 0; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
     button.panne, button.lien { padding: 10px 14px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; color: inherit; font: inherit; cursor: pointer; }
     @media (prefers-color-scheme: dark) {
       body { background: #0b1220; color: #e2e8f0; }
@@ -26,13 +27,17 @@
     </div>
     <p>Touchez le rond orange de Claude en bas à droite : il photographie cet écran, vous laisse écrire ou dicter, et envoie le tout au relais.</p>
     <p>Le petit nombre rouge sur le rond compte vos demandes à traiter (une question de Claude, une PR à relire, une demande pas partie) : touchez-le pour les voir.</p>
-    <p><button class="lien" id="mes-demandes">Voir mes demandes</button></p>
+    <p>Chaque projet a son propre interrupteur sur le pupitre : coupé, le rond ne paraît plus sur ses pages (l’interrupteur général coupe tout).</p>
+    <p class="actions"><button class="lien" id="mes-demandes">Voir mes demandes</button> <button class="lien" id="demandes-projet">Celles de Home</button></p>
   </main>
   <script>
     document.getElementById('panne').addEventListener('click', function () { console.error('TypeError: devis.client is undefined'); });
     document.getElementById('mes-demandes').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes('toutes'); });
-    // Démo : adresse du relais passée dans l'URL (?relais=http://localhost:8787), sinon le relais local de développement.
-    window.SignalerConfig = { endpoint: new URLSearchParams(location.search).get('relais') || 'http://localhost:8787', version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
+    document.getElementById('demandes-projet').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes({ projet: 'home' }); });
+    // Démo : adresse du relais passée dans l'URL (?relais=http://localhost:8787), sinon le relais local de développement ;
+    // ?projet=home (ou pupitre, havroutia, avinou) : le projet de la page, sinon d'après son adresse (ici, aucun).
+    var q = new URLSearchParams(location.search);
+    window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
   </script>
   <script src="../widget/signaler.js" defer></script>
 </body>

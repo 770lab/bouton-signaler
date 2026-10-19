@@ -12,8 +12,13 @@
  *    position       'bas-droite' (défaut) ou 'bas-gauche'
  *    html2canvas    l'adresse de html2canvas si la page interdit cdnjs (CSP)
  *    visible        fonction : false pour cacher le bouton (ex. visiteurs non connectés)
+ *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'koulam') ; sans réglage, d'après son adresse
+ *                   (Signaler.projetDeLaPage) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
+ *                   770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam, sinon aucun
  *
- *  L'interrupteur du pupitre : avant de montrer le rond, le bouton demande au relais s'il est coupé (GET /etat, 4 s au plus).
+ *  Les interrupteurs du pupitre : un GÉNÉRAL et un PAR PROJET. Avant de montrer le rond, le bouton demande au relais s'il est
+ *  coupé (GET /etat?projet=<id>, ou GET /etat pour une page d'aucun projet ; 4 s au plus) : « effectif: false » (le général ou
+ *  celui de ce projet coupé) le cache ; un relais d'avant les projets ne dit pas « effectif », son « actif: false » le cache.
  *  Coupé : le rond n'apparaît pas. Relais muet, en erreur ou lent : le rond apparaît quand même (on ne bloque pas sur une panne).
  *  Signaler.montrer() sur un bouton coupé redemande au relais : rallumé depuis le pupitre, il revient sans recharger la page ;
  *  toujours coupé, il reste caché (une page qui appelle montrer() après une connexion ne passe pas outre l'interrupteur).
@@ -22,9 +27,12 @@
  *  Une lecture sans réponse lisible est expliquée : réseau coupé, ou relais qui refuse CETTE page (adresse absente de ses ORIGINES,
  *  ou relais pas encore à jour) ; GET /etat, public, peut le dire lui-même (« origine: false »).
  *
- *  API : window.Signaler.ouvrir() · .cacher() · .montrer() · .demandes(filtre)
+ *  API : window.Signaler.ouvrir() · .cacher() · .montrer() · .demandes(filtre) · .projetDeLaPage(url) · .projets
  *        filtre = 'toutes' | 'traiter' | 'cours' ; sans filtre : « À traiter » s'il y en a, sinon toutes.
- *  Événement : window « signaler:demandes » { aTraiter, total } à chaque liste lue (pour un compteur ailleurs dans la page).
+ *        ou { projet: 'home' } / { projet: 'home', etat: 'traiter' } : les demandes de ce projet seulement (puce « Projet : Home × »
+ *        au-dessus des filtres, qu'un toucher retire). Le projet d'une demande : son champ « projet », sinon l'adresse de sa page.
+ *  Événement : window « signaler:demandes » { aTraiter, total, projets: { <id>: { aTraiter, total } } } à chaque liste lue
+ *  (pour un compteur ailleurs dans la page).
  */
 (function () {
   'use strict';
@@ -32,7 +40,7 @@
 
   var script = document.currentScript || null;
   var C = Object.assign({ position: 'bas-droite', html2canvas: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js' }, window.SignalerConfig || {});
-  if (script && script.dataset) ['endpoint', 'version', 'position', 'html2canvas'].forEach(function (k) { if (script.dataset[k]) C[k] = script.dataset[k]; });
+  if (script && script.dataset) ['endpoint', 'version', 'position', 'html2canvas', 'projet'].forEach(function (k) { if (script.dataset[k]) C[k] = script.dataset[k]; });
   var CLE_STOCKAGE = 'signaler_cle_v1';
   var CAPTURES_MAX = 6, LARGEUR_MAX = 1600, HAUTEUR_MAX = 2600, JPEG_Q = 0.8, AUDIO_MAX_MS = 180000, ETAT_DELAI_MS = 4000;
   var COUPE_MSG = 'Le bouton est coupé depuis le pupitre.';
@@ -60,6 +68,31 @@
   var ecrire = function (k, v) { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) {} };
   var h = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var base = function () { return String(C.endpoint || '').replace(/\/+$/, ''); };
+
+  // ── LES PROJETS : les mêmes que le relais (PROJETS de relay/coeur.mjs), dans l'ordre du pupitre ────────────────────────────
+  // KOULAM n'envoie rien par ce relais (sa propre bulle, sa propre routine) : il est là pour l'interrupteur et les anciennes demandes.
+  var PROJETS = [{ id: 'home', nom: 'Home' }, { id: 'pupitre', nom: 'Pupitre' }, { id: 'havroutia', nom: 'HavroutIA' },
+    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'koulam', nom: 'KOULAM' }];
+  // Le projet d'une page d'après son adresse, la même règle que le relais (projetDeLaPage de relay/coeur.mjs) ; null : aucun.
+  function projetDeLaPage(url) {
+    var u; try { u = new URL(String(url || '')); } catch (e) { return null; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+    var hote = u.hostname.toLowerCase().replace(/^www\./, ''), chemin = (u.pathname || '/').toLowerCase();
+    if (hote === '770lab.com') {
+      if (chemin.indexOf('/home/robots') === 0) return 'pupitre';
+      if (chemin.indexOf('/home') === 0) return 'home';
+      if (chemin.indexOf('/havroutia') === 0) return 'havroutia';
+      return null;
+    }
+    if (hote === 'avinou-malkenou.web.app') return 'avinou';
+    if (hote === 'koulam.app') return 'koulam';
+    return null;
+  }
+  // Un identifiant de projet donné par la page ou par une demande : en minuscules, sans blanc ; '' s'il n'y en a pas.
+  function idProjet(v) { return typeof v === 'string' ? v.trim().toLowerCase().slice(0, 40) : ''; }
+  function nomDuProjet(id) { var p = PROJETS.filter(function (x) { return x.id === id; })[0]; return p ? p.nom : id; }
+  // Le projet de CETTE page : le réglage (data-projet, SignalerConfig.projet) l'emporte sur l'adresse.
+  var PROJET_PAGE = idProjet(C.projet) || projetDeLaPage(location.href) || '';
 
   // ── LE STYLE (préfixe sgn-, clair et sombre) ───────────────────────────────────────────────────────────────────────────────
   var cote = C.position === 'bas-gauche' ? 'left' : 'right';
@@ -121,6 +154,12 @@
     + '.sgn-filtre{flex:1 1 0;min-width:0;padding:8px 4px;border:1px solid var(--b);border-radius:999px;background:transparent;color:var(--t);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}'
     + '.sgn-filtre b{color:var(--d);margin-left:3px}'
     + '.sgn-filtre[aria-pressed="true"]{background:#d97757;border-color:#d97757;color:#fff}.sgn-filtre[aria-pressed="true"] b{color:#fff}'
+    // La puce du projet choisi (Signaler.demandes({ projet })), seule sur sa ligne au-dessus des filtres ; « × » la retire.
+    + '.sgn-projet{display:flex;margin-bottom:8px;min-width:0}'
+    + '.sgn-puce{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-height:36px;padding:6px 10px 6px 14px;border:1px solid #d97757;border-radius:999px;'
+    + 'background:transparent;color:var(--t);font:inherit;font-size:14px;font-weight:600;text-align:left;overflow-wrap:anywhere;cursor:pointer}'
+    + '.sgn-puce-x{flex:0 0 auto;font-size:18px;line-height:1;color:var(--d)}'
+    + '.sgn-puce:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}'
     + '.sgn-etat-d{min-height:0;margin:6px 0}'
     + '.sgn-erreur{margin:8px 0;color:var(--ko);font-size:14px}'
     + '.sgn-vide{margin:12px 0;color:var(--d)}'
@@ -162,12 +201,26 @@
     if (o.delai) p = Promise.race([p, new Promise(function (ok, ko) { minuteur = setTimeout(function () { if (ctrl) ctrl.abort(); ko(new Error('trop lent')); }, o.delai); })]);
     return p.then(function (j) { clearTimeout(minuteur); return j; }, function (e) { clearTimeout(minuteur); throw e; });
   }
-  // L'interrupteur : seul un « actif: false » explicite cache le bouton. Le doute (panne, lenteur) le laisse paraître.
+  // Les interrupteurs : seul un « coupé » explicite cache le bouton. Le doute (panne, lenteur) le laisse paraître.
+  // « effectif » (relais à projets, avec ?projet=) = le général ET celui du projet ; sans lui (relais d'avant les projets, ou
+  // page d'aucun projet), le général « actif » ; un relais qui donnerait les projets sans « effectif » est lu projet par projet.
+  function etatCoupe(j, p) {
+    if (!j || typeof j !== 'object') return false;
+    if (typeof j.effectif === 'boolean') return !j.effectif;
+    if (j.actif === false) return true;
+    var x = p && j.projets && typeof j.projets === 'object' ? j.projets[p] : null;
+    return !!(x && typeof x === 'object' && x.actif === false);
+  }
   function lireEtat() {
     if (!C.endpoint) return Promise.resolve(true);
-    return appel('/etat', { delai: ETAT_DELAI_MS }).then(function (j) {
+    var p = PROJET_PAGE, t0 = Date.now();
+    return appel('/etat' + (p ? '?projet=' + encodeURIComponent(p) : ''), { delai: ETAT_DELAI_MS }).then(function (j) {
+      // Projet inconnu du relais (400) : au moins l'interrupteur général, dans le temps qui reste.
+      if (p && j.statut === 400) { p = ''; return appel('/etat', { delai: Math.max(500, ETAT_DELAI_MS - (Date.now() - t0)) }); }
+      return j;
+    }).then(function (j) {
       if (j.origine === false) origineRefusee = true;
-      return !(j && j.actif === false);
+      return !etatCoupe(j, p);
     }, function () { return true; });
   }
   var reverification = null;
@@ -289,22 +342,28 @@
   ];
   var NOMS_FILTRE = { toutes: 'toutes', tout: 'toutes', traiter: 'traiter', a_traiter: 'traiter', 'à traiter': 'traiter', cours: 'cours', en_cours: 'cours', 'en cours': 'cours' };
   // liste : null tant que rien n'est lu · auto : le filtre suit le nombre à traiter (ouvert par l'API sans filtre)
-  var D = { liste: null, stockage: true, erreur: '', enCours: false, filtre: 'toutes', auto: false, luA: 0 };
+  // projet : la liste ne montre que ce projet (Signaler.demandes({ projet })), null : tous
+  var D = { liste: null, stockage: true, erreur: '', enCours: false, filtre: 'toutes', auto: false, luA: 0, projet: null };
   var vue = 'signaler', depuisSignaler = false, rendus = 0, numeroLecture = 0;
 
+  // Le nombre du rond compte TOUTES les demandes à traiter ; la liste, celles du projet choisi s'il y en a un.
   function compteATraiter() { return D.liste ? D.liste.filter(FILTRES[1].garde).length : 0; }
+  function listeVue() { return !D.liste ? [] : D.projet ? D.liste.filter(function (x) { return projetDe(x) === D.projet; }) : D.liste; }
   function httpsSur(u) { u = String(u || ''); return u.length <= 500 && /^https:\/\/[^\s"'<>]+$/i.test(u) ? u : ''; }
-  // Le nom du projet, d'après l'adresse de la page où la demande a été faite.
-  function projet(url) {
-    var u; try { u = new URL(String(url || '')); } catch (e) { return ''; }
-    var hote = u.host.replace(/^www\./i, '').toLowerCase(), chemin = u.pathname || '/';
-    if (hote === '770lab.com') {
-      if (/^\/home\/robots/i.test(chemin)) return 'Pupitre';
-      if (/^\/home/i.test(chemin)) return 'Home';
-      if (/^\/havroutia/i.test(chemin)) return 'HavroutIA';
-    }
-    if (hote === 'avinou-malkenou.web.app') return 'Avinou Malkenou';
-    return hote;
+  // Le projet d'une demande : son champ « projet » (relais à projets), sinon d'après l'adresse de la page où elle a été faite.
+  function urlDe(x) { return x && x.page && typeof x.page === 'object' ? x.page.url : ''; }
+  function projetDe(x) { return idProjet(x && x.projet) || projetDeLaPage(urlDe(x)) || ''; }
+  // Ce que la carte en dit : le nom du projet, sinon l'adresse du site.
+  function nomProjetDe(x) {
+    var p = projetDe(x); if (p) return nomDuProjet(p);
+    try { return new URL(String(urlDe(x) || '')).host.replace(/^www\./i, '').toLowerCase(); } catch (e) { return ''; }
+  }
+  // Par projet : { <id>: { aTraiter, total } } pour chaque projet de PROJETS (pour le pupitre, qui en fait une ligne chacun).
+  function comptesParProjet() {
+    var r = {};
+    PROJETS.forEach(function (p) { r[p.id] = { aTraiter: 0, total: 0 }; });
+    (D.liste || []).forEach(function (x) { var c = r[projetDe(x)]; if (!c) return; c.total++; if (FILTRES[1].garde(x)) c.aTraiter++; });
+    return r;
   }
   function quand(ms) {
     var d = new Date(Number(ms));
@@ -327,7 +386,7 @@
         D.liste = (Array.isArray(j.demandes) ? j.demandes : []).filter(function (x) { return x && typeof x === 'object'; })
           .sort(function (a, b) { return (Number(b.creeLeMs) || 0) - (Number(a.creeLeMs) || 0); });
         D.stockage = j.stockage !== false; D.erreur = ''; D.luA = Date.now();
-        try { window.dispatchEvent(new CustomEvent('signaler:demandes', { detail: { aTraiter: compteATraiter(), total: D.liste.length } })); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent('signaler:demandes', { detail: { aTraiter: compteATraiter(), total: D.liste.length, projets: comptesParProjet() } })); } catch (e) {}
       } else if (j.statut === 401 || j.cle) {
         ecrire(CLE_STOCKAGE, ''); D.liste = null;
         D.erreur = 'Clé refusée : le relais ne la connaît pas. Tape à nouveau ta clé d’équipe.';
@@ -351,17 +410,20 @@
     var t = fond && fond.querySelector('.sgn-tete [data-a="demandes"]');
     if (t) { t.innerHTML = 'Mes demandes' + (n ? ' <span class="sgn-nb">' + n + '</span>' : ''); t.setAttribute('aria-label', 'Mes demandes' + (n ? ', ' + n + ' à traiter' : '')); }
   }
-  function ouvrirDemandes(filtre) {
+  // filtre : 'toutes' | 'traiter' | 'cours', ou null (« À traiter » s'il y en a) · projet : un id, ou null pour tous les projets.
+  function filtreAuto() { return listeVue().filter(FILTRES[1].garde).length ? 'traiter' : 'toutes'; }
+  function ouvrirDemandes(filtre, projet) {
     if (envoiEnCours || !document.body) return;
     if (vue !== 'demandes') depuisSignaler = !!fond && vue === 'signaler';
     vue = 'demandes';
     if (lire(CLE_STOCKAGE)) D.erreur = '';   // une vieille erreur ne s'affiche pas pendant la nouvelle lecture
+    D.projet = projet || null;
     D.auto = !filtre;
-    if (filtre) D.filtre = filtre; else if (D.liste) D.filtre = compteATraiter() ? 'traiter' : 'toutes';
+    if (filtre) D.filtre = filtre; else if (D.liste) D.filtre = filtreAuto();
     rendre();
     chargerDemandes().then(function () {
       if (!fond || vue !== 'demandes') return;
-      if (D.auto) D.filtre = compteATraiter() ? 'traiter' : 'toutes';
+      if (D.auto) D.filtre = filtreAuto();
       rendre();
     });
   }
@@ -371,7 +433,7 @@
     var k = champ.value.trim();
     if (k.length < 16) { dire(etat, 'Tape ta clé d’équipe (16 caractères au moins).', 'ko'); champ.focus(); return; }
     ecrire(CLE_STOCKAGE, k); D.erreur = ''; D.liste = null;
-    ouvrirDemandes(D.auto ? null : D.filtre);
+    ouvrirDemandes(D.auto ? null : D.filtre, D.projet);
   }
   function renvoyer(id, el) {
     var cle = lire(CLE_STOCKAGE);
@@ -397,7 +459,7 @@
 
   function carte(x) {
     var e = ETATS[x.etat] ? x.etat : 'inconnu';
-    var p = projet(x.page && typeof x.page === 'object' ? x.page.url : ''), q = quand(x.creeLeMs);
+    var p = nomProjetDe(x), q = quand(x.creeLeMs);
     var texte = String(x.texte || '').trim();
     if (!texte) texte = Number(x.captures) > 0 ? '(capture seule, sans texte)' : x.audio ? '(note vocale seule)' : '(sans texte)';
     var acts = [], session = httpsSur(x.sessionUrl);
@@ -430,11 +492,17 @@
     }
     var l = D.liste, erreur = D.erreur ? '<p class="sgn-erreur">' + h(D.erreur) + '</p>' : '';
     if (erreur && l && D.luA) erreur += '<p class="sgn-aide">Dernière liste reçue à ' + heure(D.luA) + ' (peut-être plus à jour) :</p>';
-    if (!l) return t + (erreur || '<p class="sgn-vide">Chargement…</p>') + bas(!!erreur);
+    // Le filtre d'un projet : une puce sur sa propre ligne, au-dessus des trois filtres ; la toucher montre tous les projets.
+    var nom = D.projet ? nomDuProjet(D.projet) : '';
+    var puce = D.projet ? '<div class="sgn-projet"><button type="button" class="sgn-puce" data-a="sansprojet" aria-label="Projet : ' + h(nom)
+      + '. Toucher pour voir tous les projets">Projet : ' + h(nom) + ' <span class="sgn-puce-x" aria-hidden="true">×</span></button></div>' : '';
+    if (!l) return t + puce + (erreur || '<p class="sgn-vide">Chargement…</p>') + bas(!!erreur);
     if (!D.stockage) return t + erreur + '<p class="sgn-vide">Le relais n’a pas de stockage : il ne garde pas les demandes, cette liste reste donc vide. Elles partent quand même à Claude.</p>' + bas(true);
-    if (!l.length) return t + erreur + '<div class="sgn-etat sgn-etat-d" role="status" aria-live="polite"></div><p class="sgn-vide">Aucune demande pour l’instant.</p>' + bas(true);
+    l = listeVue();
+    if (!l.length) return t + puce + erreur + '<div class="sgn-etat sgn-etat-d" role="status" aria-live="polite"></div><p class="sgn-vide">'
+      + (D.projet ? 'Aucune demande pour ce projet.' : 'Aucune demande pour l’instant.') + '</p>' + bas(true);
     var f = FILTRES.filter(function (x) { return x.id === D.filtre; })[0] || FILTRES[0], visibles = l.filter(f.garde);
-    return t + '<div class="sgn-filtres" role="group" aria-label="Filtrer les demandes">' + FILTRES.map(function (x) {
+    return t + puce + '<div class="sgn-filtres" role="group" aria-label="Filtrer les demandes">' + FILTRES.map(function (x) {
       return '<button type="button" class="sgn-filtre" data-a="filtre" data-v="' + x.id + '" aria-pressed="' + (x.id === f.id) + '">' + x.lib + ' <b>' + l.filter(x.garde).length + '</b></button>';
     }).join('') + '</div>'
       + '<div class="sgn-etat sgn-etat-d" role="status" aria-live="polite"></div>' + erreur
@@ -517,6 +585,7 @@
     else if (a === 'envoyer') envoyer(fond.querySelector('.sgn-etat'));
     else if (a === 'demandes') ouvrirDemandes(null);
     else if (a === 'filtre') { D.filtre = el.getAttribute('data-v'); D.auto = false; rendre(); }
+    else if (a === 'sansprojet') { D.projet = null; if (D.auto) D.filtre = filtreAuto(); rendre(); }
     else if (a === 'actualiser') { rendre('Actualisation…'); chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(D.erreur ? '' : 'Liste à jour (' + heure() + ').', 'ok'); }); }
     else if (a === 'renvoyer') renvoyer(el.getAttribute('data-id'), el);
     else if (a === 'voircle') validerCle();
@@ -623,7 +692,13 @@
       }
       monter(); if (fab) fab.style.display = ''; majCompteur();
     },
-    demandes: function (filtre) { ouvrirDemandes(NOMS_FILTRE[String(filtre || '').toLowerCase()] || null); },
+    // filtre : 'toutes' | 'traiter' | 'cours', ou { projet: '<id>', etat: 'traiter' } (etat facultatif) pour un seul projet.
+    demandes: function (filtre) {
+      var o = filtre && typeof filtre === 'object' ? filtre : { etat: filtre };
+      ouvrirDemandes(NOMS_FILTRE[String(o.etat || o.filtre || '').toLowerCase()] || null, idProjet(o.projet) || null);
+    },
+    projetDeLaPage: projetDeLaPage,
+    projets: PROJETS.map(function (p) { return { id: p.id, nom: p.nom }; }),
     _etat: function () { return B; },
   };
 })();
