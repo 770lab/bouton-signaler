@@ -471,6 +471,8 @@
     + '.sgn-avap{display:flex;gap:8px;margin-top:8px}'
     + '.sgn-ap{position:relative;flex:1 1 0;min-width:0;max-width:240px;padding:0;border:1px solid var(--b);border-radius:10px;background:var(--f);overflow:hidden;cursor:zoom-in;line-height:0}'
     + '.sgn-ap img{display:block;width:100%;height:112px;object-fit:cover;object-position:top center}'
+    + '.sgn-ap.sgn-ap-ko{cursor:pointer}.sgn-ap-ko img{visibility:hidden}.sgn-ap-ko::after{content:"Image bloquée par cette page : touche pour l’ouvrir";position:absolute;inset:0 0 26px;display:flex;align-items:center;justify-content:center;padding:6px 8px;font-size:12px;line-height:1.3;text-align:center;color:var(--d)}'
+    + '.sgn-vis-ko{margin:0;padding:18px 12px;text-align:center;color:#fff;font-size:15px;line-height:1.45}.sgn-vis-ko a{color:#fff;font-weight:700}'
     + '.sgn-ap span{position:absolute;left:6px;bottom:6px;padding:0 8px;border-radius:999px;background:rgba(15,23,42,.8);color:#fff;font-size:12px;font-weight:700;line-height:20px}'
     + '.sgn-ap:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}'
     + '.sgn-vis{position:fixed;inset:0;z-index:2147483002;display:flex;flex-direction:column;box-sizing:border-box;background:rgba(2,6,23,.94);color:#f1f5f9;'
@@ -1565,13 +1567,16 @@
     lancer(false).then(function (m) { if (m) apresAction(m); else if (fond) el.disabled = false; });
   }
   // « Annuler » se garde appuyé 1,2 s (doigt, souris ou clavier) : un toucher trop court ne fait rien, il dit comment faire.
+  // Pendant l'appui, RIEN ne bouge au-dessus du bouton (le bouton qui se remplit suffit) : un message écrit dans .sgn-etat
+  // décalait la carte, Chrome voyait alors la souris « quitter » le bouton immobile (pointerleave) et l'appui tombait.
+  // Le bouton capture le pointeur (comme le fait déjà le doigt) : seul le relâcher ou une annulation du geste l'arrête.
   function brancherTenir(b) {
     var t = null;
     function etat() { return fond && fond.querySelector('.sgn-etat'); }
     function debut(e) {
       if (t || b.disabled || (e && e.button != null && e.button > 0)) return;
+      if (e && e.pointerId != null) try { b.setPointerCapture(e.pointerId); } catch (er) {}
       b.classList.add('sgn-tient');
-      dire(etat(), 'Garde appuyé : la mise en ligne va être annulée…');
       t = setTimeout(function () { t = null; b.classList.remove('sgn-tient'); annulerMiseEnLigne(b.getAttribute('data-id'), b); }, TENIR_MS);
     }
     function fin() {
@@ -1580,7 +1585,9 @@
       dire(etat(), 'Pas annulé : garde le doigt (ou la souris) appuyé une seconde sur « Annuler ».');
     }
     b.addEventListener('pointerdown', debut);
-    ['pointerup', 'pointercancel', 'pointerleave', 'blur'].forEach(function (n) { b.addEventListener(n, fin); });
+    ['pointerup', 'pointercancel', 'lostpointercapture', 'blur'].forEach(function (n) { b.addEventListener(n, fin); });
+    // Sans capture (navigateur qui la refuse), sortir du bouton arrête l'appui ; avec la capture, ce n'est jamais un vrai départ.
+    b.addEventListener('pointerleave', function (e) { try { if (b.hasPointerCapture(e.pointerId)) return; } catch (er) {} fin(); });
     b.addEventListener('keydown', function (e) { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); debut(); } });
     b.addEventListener('keyup', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fin(); } });
     b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
@@ -1617,6 +1624,13 @@
         + '<div class="sgn-vis-i"><img src="' + h(im[c]) + '" alt="' + h(legende(x, c)) + '"></div><p class="sgn-vis-l">' + h(legende(x, c)) + '</p>';
     }
     montrer(k);
+    // Une page dont la CSP refuse les images du relais (img-src) : on le dit, avec un lien qui ouvre la capture dans un onglet.
+    vis.addEventListener('error', function (e) {
+      var i = e.target, z = i && i.tagName === 'IMG' && i.parentNode;
+      if (!z || !i.getAttribute('src')) return;
+      z.innerHTML = '<p class="sgn-vis-ko">Cette page bloque l’affichage de la capture. <a href="' + h(i.getAttribute('src'))
+        + '" target="_blank" rel="noopener noreferrer">Ouvrir la capture dans un nouvel onglet</a></p>';
+    }, true);
     vis.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-v]') : null, v = b ? b.getAttribute('data-v') : '';
       if (v === 'avant' || v === 'apres') { montrer(v); var nb = vis.querySelector('[data-v="' + v + '"]'); if (nb) nb.focus({ preventScroll: true }); return; }
@@ -1771,6 +1785,13 @@
   function creerFond() {
     fond = marquer(document.createElement('div')); fond.className = 'sgn-fond'; vueRendue = '';
     fond.addEventListener('click', clic);
+    // Vignette avant / après que la page refuse (CSP img-src sans le relais) : le cadre le dit, et le toucher ouvre un onglet.
+    fond.addEventListener('error', function (e) {
+      var i = e.target, b = i && i.tagName === 'IMG' && i.closest ? i.closest('.sgn-ap') : null;
+      if (!b || b.classList.contains('sgn-ap-ko')) return;
+      b.classList.add('sgn-ap-ko');
+      b.setAttribute('aria-label', (b.getAttribute('aria-label') || '').replace(/ : voir en grand$/, '') + ' : bloquée par cette page, ouvrir dans un nouvel onglet');
+    }, true);
     fond.addEventListener('input', function (e) { if (e.target.classList.contains('sgn-texte')) { B.texte = e.target.value; sauver(); } });
     fond.addEventListener('change', function (e) { if (e.target.getAttribute('data-a') === 'importer') importer(e.target.files).then(function () { rendre(); }); });
     fond.addEventListener('keydown', function (e) { if (e.key === 'Enter' && vue === 'demandes' && e.target.classList.contains('sgn-cle')) { e.preventDefault(); validerCle(); } });
@@ -1846,7 +1867,13 @@
     else if (a === 'renvoyer') renvoyer(el.getAttribute('data-id'), el, el.getAttribute('data-ab'));
     else if (a === 'valider') mettreEnLigne(el.getAttribute('data-id'), el);
     else if (a === 'annuler') { /* rien au simple toucher : brancherTenir (garder appuyé 1,2 s) */ }
-    else if (a === 'agrandir') ouvrirVisionneuse(el.getAttribute('data-id'), el.getAttribute('data-k'), el);
+    else if (a === 'agrandir') {
+      if (!el.classList.contains('sgn-ap-ko')) ouvrirVisionneuse(el.getAttribute('data-id'), el.getAttribute('data-k'), el);
+      else {
+        var xi = (D.liste || []).filter(function (d) { return d && d.id === el.getAttribute('data-id'); })[0], ui = imagesDe(xi)[el.getAttribute('data-k')];
+        if (ui) window.open(ui, '_blank', 'noopener,noreferrer');
+      }
+    }
     else if (a === 'empreinte') seConnecter(el);
     else if (a === 'jaicle' || a === 'sanscle') {
       montrerCle = a === 'jaicle'; majAcces();

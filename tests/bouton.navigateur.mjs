@@ -36,6 +36,7 @@ const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
 // Le site de démonstration (la racine du dépôt, en statique).
 // ?dataProjet=<id> : la démo servie avec l'attribut data-projet sur la balise du bouton (écrit ici, par le site : une page
 // fournie par Playwright n'aurait pas d'adresse IP, et Chrome lui refuserait le bouton et le relais, servis sur 127.0.0.1).
+// ?csp=img : la démo servie avec la CSP des images du pupitre (img-src 'self' data: blob:), écrite ici pour la même raison.
 const DEMO = join(RACINE, 'demo', 'index.html');
 const site = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), chemin = decodeURIComponent(u.pathname), attribut = u.searchParams.get('dataProjet');
@@ -48,7 +49,8 @@ const site = http.createServer((req, res) => {
   }
   const p = join(RACINE, chemin);
   if (!p.startsWith(RACINE) || !existsSync(p)) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }); res.end(readFileSync(p));
+  const csp = chemin === '/demo/index.html' && u.searchParams.get('csp') === 'img' ? { 'Content-Security-Policy': "img-src 'self' data: blob:" } : {};
+  res.writeHead(200, Object.assign({ 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }, csp)); res.end(readFileSync(p));
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const ORIGINE = 'http://127.0.0.1:' + site.address().port;
@@ -285,9 +287,10 @@ async function page(taille, o = {}) {
   });
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
   // o.chemin : une autre page que la démo (/home/, /home/robots.html…) · o.projet : ?projet= (SignalerConfig.projet de la démo)
-  // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site)
+  // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site) · o.csp : la CSP des images du pupitre
   await p.goto((o.origine || ORIGINE) + (o.chemin || '/demo/index.html') + '?relais=' + encodeURIComponent(o.relais || RELAIS)
-    + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : ''));
+    + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : '')
+    + (o.csp ? '&csp=img' : ''));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
@@ -1372,7 +1375,11 @@ try {
   await retourDe(R5, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(78)], images: { avant: AVANT, apres: APRES } });
   await ctl('decalage', { ms: 6 * 60000 });
   await Dp.p.evaluate((ms) => { const n = Date.now.bind(Date); Date.now = () => n() + ms; }, 6 * 60000);
+  const jA = (await requetes()).length;
   await actualiser(Dp.p, true);
+  // La liste redessinée (session de plus de 5 min, une carte « Mettre en ligne ») précharge un défi : on attend qu'il soit arrivé.
+  for (let i = 0; i < 50 && !(await requetes()).slice(jA).some((x) => x.m === 'POST' && x.p === '/auth/options/connexion'); i++) await attendre(100);
+  await attendre(200);
   let j0 = (await requetes()).length, g0 = (await webauthn(Dp.p)).get;
   n0 = (await ctl('appels')).length;
   await versCarte(Dp.p, R5);
@@ -1466,7 +1473,62 @@ try {
   await etatDit(E.p, /^Annulation lancée/);
   ok((await ctl('appels')).slice(n0).some((a) => a.text.startsWith(Coeur.MARQUE_ANNULER) && a.text.includes('fedcba987654')), '« Annuler » gardé appuyé à la souris : le travail ANNULER part');
   ok(!pb11.length && !E.erreursPage.length, '768 px sombre : mise en page' + (pb11.length ? ' — ' + pb11.join(' ; ') : '') + (E.erreursPage.length ? ' — ' + E.erreursPage.join(' ; ') : ''));
+  // g) « Annuler » à la souris (Chrome sur Mac, trackpad) à 360 px après un clic trop court, puis à 1280 px sur une liste qu'on
+  // vient d'ouvrir : pendant l'appui, rien ne bouge au-dessus du bouton et il garde le pointeur (sinon Chrome voyait la souris
+  // « sortir » du bouton immobile et l'appui tombait).
+  for (const [w, hh, court] of [[360, 740, true], [1280, 800, false]]) {
+    const R = (await signalerNode('Le titre est coupé (' + w + ' px).')).ref, sha = 'abcabc' + w + '0';
+    ok((await retourDe(R, { etat: 'en_ligne', resume: 'En ligne.', images: { avant: AVANT, apres: APRES }, annulation: { depot: '770lab/home', commits: [sha] } })).ok, w + ' px : retour « en ligne »');
+    await E.p.keyboard.press('Escape');
+    await E.p.setViewportSize({ width: w, height: hh });
+    await E.p.evaluate(() => window.Signaler.demandes('toutes'));
+    const sel = '.sgn-carte[data-id="' + R + '"] [data-a="annuler"]';
+    await E.p.waitForSelector(sel, { timeout: 10000 });
+    // La liste en haut (comme à l'ouverture) : sans défilement, Chrome ne recale rien, un message qui change de hauteur décale le bouton.
+    await E.p.$eval('.sgn-boite', (b) => { b.scrollTop = 0; });
+    ok((await boite(E.p, sel)).y + 40 < hh, w + ' px : la nouvelle demande est en tête, son « Annuler » se voit sans défiler');
+    n0 = (await ctl('appels')).length;
+    if (court) {
+      const b0 = await boite(E.p, sel);
+      await E.p.mouse.click(b0.cx, b0.cy);
+      await etatDit(E.p, /^Pas annulé : garde le doigt/);
+      ok((await ctl('appels')).length === n0, w + ' px : clic trop court à la souris : rien ne part');
+    }
+    const b1 = await boite(E.p, sel);
+    await E.p.mouse.move(b1.cx, b1.cy); await E.p.mouse.down();
+    await attendre(500);
+    const b2 = await boite(E.p, sel), tient = await E.p.$eval(sel, (b) => b.classList.contains('sgn-tient'));
+    await capture(E.p, 'souris-annuler-' + w + '-dark.png');
+    await attendre(900); await E.p.mouse.up();
+    await etatDit(E.p, /^Annulation lancée/);
+    ok(tient && Math.abs(b2.y - b1.y) < 1 && (await ctl('appels')).slice(n0).some((a) => a.text.startsWith(Coeur.MARQUE_ANNULER) && a.text.includes(sha)),
+      w + ' px : « Annuler » gardé appuyé à la souris' + (court ? ' après un clic trop court' : ' sur une liste qu’on vient d’ouvrir') + ' : le bouton ne bouge pas, le travail ANNULER part'
+      + (tient && Math.abs(b2.y - b1.y) < 1 ? '' : ' (tient ' + tient + ', décalage ' + (b2.y - b1.y) + ' px)'));
+  }
   await E.ctx.close();
+  // h) Une page dont la CSP refuse les images du relais (img-src 'self' data: blob:, le pupitre avant sa correction) : la vignette le
+  // dit au lieu d'un cadre vide, et la toucher ouvre la capture dans un nouvel onglet (adresse du relais).
+  {
+    const G = await surVrai({ width: 412, height: 915 }, { cle: CLE, csp: true });
+    const LOGG = []; G.p.on('console', (m) => LOGG.push(m.type() + ': ' + m.text())); G.p.on('requestfailed', (r) => LOGG.push('échec ' + r.method() + ' ' + r.url() + ' ' + (r.failure() || {}).errorText));
+    await G.p.waitForSelector('.sgn-fab');
+    await G.p.evaluate(() => window.Signaler.demandes('toutes'));
+    await G.p.waitForSelector('.sgn-carte .sgn-ap', { timeout: 10000 }).catch(async (e) => {
+      await capture(G.p, 'images-refusees-ko.png');
+      console.log('  (liste : ' + (await G.p.evaluate(() => (document.querySelector('.sgn-boite') || document.body).innerText.replace(/\s+/g, ' ').slice(0, 600))) + ')\n' + LOGG.join('\n'));
+      throw e;
+    });
+    const ko = await G.p.waitForFunction(() => document.querySelectorAll('.sgn-ap.sgn-ap-ko').length >= 2, null, { timeout: 8000 }).then(() => true, () => false);
+    const selV = '.sgn-ap.sgn-ap-ko[data-k="avant"]';
+    await G.p.$eval(selV, (b) => b.scrollIntoView({ block: 'center' }));
+    await capture(G.p, 'images-refusees-412-light.png');
+    const [onglet] = await Promise.all([G.ctx.waitForEvent('page', { timeout: 8000 }), G.p.click(selV)]);
+    ok(ko && /\/piece\/[0-9a-f]{32}$/.test(onglet.url()) && onglet.url().startsWith(VRAI) && !(await G.p.$('.sgn-vis')),
+      'page qui refuse les images du relais : la vignette dit « Image bloquée par cette page », la toucher ouvre la capture dans un onglet');
+    const pbG = await controler(G.p);
+    ok(!pbG.length && !G.erreursPage.length, '412 px, images refusées : mise en page' + (pbG.length ? ' — ' + pbG.join(' ; ') : '') + (G.erreursPage.length ? ' — ' + G.erreursPage.join(' ; ') : ''));
+    await G.ctx.close();
+  }
   }
   console.log('  captures : ' + CAPTURES);
 } catch (e) { ko++; console.log('  ✗ exception : ' + (e && e.stack || e)); }
