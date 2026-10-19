@@ -4,18 +4,26 @@
 // ici d'après le contrat : le test du bouton ne dépend pas du code de ces routes côté relais (testées par relais.test.mjs).
 //   node tests/bouton.navigateur.mjs        (Playwright doit être installé : npm i -D playwright, ou global via NODE_PATH)
 //   SIGNALER_CAPTURES=/un/dossier            où ranger les captures d'écran (défaut : tests/.cache/)
+//   SIGNALER_PREFIXE=g1-                     un préfixe pour leurs noms (pour comparer deux passages)
 // html2canvas : servi depuis tests/.cache/ s'il y est (le navigateur du test ne va pas sur Internet), sinon depuis cdnjs.
 // Les pages des projets (http://770lab.com:<port>/home/, /home/robots.html, /havroutia/) : le navigateur envoie 770lab.com sur
 // 127.0.0.1 (--host-resolver-rules), le site y sert la démo ; le bouton y trouve son projet d'après l'adresse, comme en ligne.
+// Section 11 : le VRAI relais tout entier (l'export par défaut du Worker) dans un fil à part, avec un Workers KV en mémoire, une
+// fausse routine pour les deux abonnements et une montre qu'on peut avancer ; Chrome y joue l'empreinte avec son authentificateur
+// virtuel (protocole DevTools, WebAuthn) : inscription, connexion, empreinte fraîche, session expirée, appareil retiré.
 import http from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { Worker } from 'node:worker_threads';
+import { randomBytes } from 'node:crypto';
 import { signaler } from '../relay/cloudflare/worker.mjs';
+import * as Coeur from '../relay/coeur.mjs';
 
 const RACINE = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CAPTURES = process.env.SIGNALER_CAPTURES || join(RACINE, 'tests', '.cache');
+const PREFIXE = String(process.env.SIGNALER_PREFIXE || '').replace(/[^a-z0-9_-]/gi, '');
 mkdirSync(CAPTURES, { recursive: true });
 let chromium;
 try { ({ chromium } = createRequire(import.meta.url)('playwright')); } catch (e) { console.log('⊘ Playwright absent : test du navigateur non joué'); process.exit(0); }
@@ -28,9 +36,12 @@ const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
 // Le site de démonstration (la racine du dépôt, en statique).
 // ?dataProjet=<id> : la démo servie avec l'attribut data-projet sur la balise du bouton (écrit ici, par le site : une page
 // fournie par Playwright n'aurait pas d'adresse IP, et Chrome lui refuserait le bouton et le relais, servis sur 127.0.0.1).
+// ?csp=img : la démo servie avec la CSP des images du pupitre (img-src 'self' data: blob:), écrite ici pour la même raison.
 const DEMO = join(RACINE, 'demo', 'index.html');
 const site = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), chemin = decodeURIComponent(u.pathname), attribut = u.searchParams.get('dataProjet');
+  if (chemin === '/api/panne') { res.writeHead(500, { 'Content-Type': 'application/json' }); return res.end('{"ok":false}'); }
+  if (chemin === '/api/panne-xhr') { res.writeHead(503); return res.end(); }
   if (/^\/(home|havroutia)/i.test(chemin) || (attribut && chemin === '/demo/index.html')) {
     let html = readFileSync(DEMO, 'utf8');
     if (attribut) html = html.replace('<script src="../widget/signaler.js"', '<script src="../widget/signaler.js" data-projet="' + attribut.replace(/[^a-z0-9_-]/gi, '') + '"');
@@ -38,7 +49,8 @@ const site = http.createServer((req, res) => {
   }
   const p = join(RACINE, chemin);
   if (!p.startsWith(RACINE) || !existsSync(p)) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }); res.end(readFileSync(p));
+  const csp = chemin === '/demo/index.html' && u.searchParams.get('csp') === 'img' ? { 'Content-Security-Policy': "img-src 'self' data: blob:" } : {};
+  res.writeHead(200, Object.assign({ 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }, csp)); res.end(readFileSync(p));
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const ORIGINE = 'http://127.0.0.1:' + site.address().port;
@@ -105,7 +117,7 @@ function demandesDeMarie() {
   ];
 }
 const faux = { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: {}, appelsEtat: 0, appelsDemandes: 0, renvois: [],
-  entetesEtat: null, requetesEtat: [] };
+  entetesEtat: null, requetesEtat: [], signalements: [], auth: [] };
 function remettre() {
   Object.assign(faux, { etat: 'on', etatOuvert: false, etatVieux: false, coupe: false, projets: {}, demandes: 'normal', base: { marie: demandesDeMarie(), paul: [] }, renvois: [], requetesEtat: [] });
 }
@@ -126,9 +138,11 @@ const relais = http.createServer(async (req, res) => {
   };
   const qui = NOMS[String(req.headers['x-signaler-cle'] || '')];
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, Object.assign(cors, permise ? { 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Signaler-Cle', 'Access-Control-Max-Age': '600' } : {}));
+    res.writeHead(204, Object.assign(cors, permise ? { 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Signaler-Cle, Authorization', 'Access-Control-Max-Age': '600' } : {}));
     return res.end();
   }
+  // L'empreinte : ce faux relais est celui d'avant SESSION_SECRET (« pas encore réglée », 503) ; le vrai est joué en 11.
+  if (u.pathname.startsWith('/auth/')) { faux.auth.push(req.method + ' ' + u.pathname); return repondre(503, { ok: false, erreur: 'connexion par empreinte pas encore réglée' }); }
   if (req.method === 'GET' && u.pathname === '/etat') {
     faux.appelsEtat++; faux.entetesEtat = req.headers;
     const pq = u.searchParams.get('projet'); faux.requetesEtat.push(pq);
@@ -169,6 +183,8 @@ const relais = http.createServer(async (req, res) => {
     Object.assign(d, { etat: 'envoyee', sessionUrl: 'https://claude.ai/code/session_01RENVOI', majLeMs: Date.now(), retourHash: 'e'.repeat(64) }); delete d.erreur;
     return repondre(200, { ok: true, demande: publique(d) });
   }
+  // faux.signalements : chaque corps de POST /signaler tel que le bouton l'a envoyé (images avec leur dessin, contexte…).
+  if (req.method === 'POST' && u.pathname === '/signaler') { try { faux.signalements.push(JSON.parse(texteDe(corps))); } catch (e) {} }
   if (req.method === 'POST' && u.pathname === '/signaler' && permise && qui) {
     let pj = null; try { pj = projetDeLaPage(JSON.parse(texteDe(corps)).contexte.url); } catch (e) {}
     if (faux.coupe || (pj && faux.projets[pj] === false)) return repondre(403, { ok: false, coupe: true, erreur: 'le bouton est coupé depuis le pupitre' });
@@ -180,23 +196,105 @@ const relais = http.createServer(async (req, res) => {
 await new Promise((r) => relais.listen(0, '127.0.0.1', r));
 const RELAIS = 'http://127.0.0.1:' + relais.address().port;
 
+// ── LE VRAI RELAIS (section 11) : l'export par défaut de relay/cloudflare/worker.mjs, dans un fil à part (worker_threads) ──────
+// Sa montre avance à la demande (POST /__test/decalage) sans toucher à celle de ce processus (Playwright compte ses délais) : les
+// 12 h d'une session, les 5 minutes d'une empreinte fraîche et les 15 minutes « sans nouvelle » sont vraiment éprouvées. Workers KV
+// en mémoire (ses durées suivent cette montre) ; la routine des DEUX abonnements est fausse : rien ne sort vers api.anthropic.com.
+// /__test/… : decalage { ms }, routine { trig_…: statut }, appels (ce qu'a reçu la routine), journal (les requêtes des pages, et
+// si elles portaient une session ou la clé), kv?prefixe= (les clés rangées).
+const FIL_RELAIS = String.raw`
+const { parentPort, workerData } = require('node:worker_threads');
+const http = require('node:http');
+(async () => {
+  const worker = (await import(workerData.url)).default;
+  if (!workerData.bavard) console.log = () => {};   // le journal du relais : SIGNALER_JOURNAL=1 pour le voir
+  const montre = Date.now.bind(Date);
+  let decalage = 0;
+  Date.now = () => montre() + decalage;
+  const objets = new Map();
+  const octetsDe = (v) => (typeof v === 'string' ? v : v instanceof ArrayBuffer ? new Uint8Array(v.slice(0)) : new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)));
+  const lu = (k) => { const x = objets.get(k); if (x && x.fin && x.fin <= Date.now()) { objets.delete(k); return null; } return x || null; };
+  const PIECES_KV = {
+    put: async (k, v, o) => { objets.set(k, { v: octetsDe(v), fin: o && o.expirationTtl ? Date.now() + o.expirationTtl * 1000 : 0, meta: (o && o.metadata) || null }); },
+    get: async (k) => { const x = lu(k); return x ? (typeof x.v === 'string' ? x.v : new TextDecoder().decode(x.v)) : null; },
+    getWithMetadata: async (k) => {
+      const x = lu(k); if (!x) return { value: null, metadata: null };
+      const u = typeof x.v === 'string' ? new TextEncoder().encode(x.v) : x.v;
+      return { value: u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength), metadata: x.meta };
+    },
+    delete: async (k) => { objets.delete(k); },
+  };
+  const appels = [], journal = [], reponses = {};
+  globalThis.fetch = async (url, init) => {
+    const u = String(url && url.url ? url.url : url), m = /^https:\/\/api\.anthropic\.com\/v1\/claude_code\/routines\/(trig_[A-Za-z0-9]+)\/fire$/.exec(u);
+    if (!m) throw new Error('sortie refusée par le test : ' + u);
+    const statut = reponses[m[1]] || 200, n = appels.length + 1;
+    appels.push({ trig: m[1], statut: statut, text: JSON.parse(init.body).text });
+    if (statut !== 200) return new Response(JSON.stringify({ error: { type: statut === 429 ? 'rate_limit_error' : 'invalid_request_error', message: statut === 429 ? 'plus de crédit pour le moment' : 'refusé' } }),
+      { status: statut, headers: Object.assign({ 'content-type': 'application/json' }, statut === 429 ? { 'retry-after': '3600' } : {}) });
+    return new Response(JSON.stringify({ claude_code_session_id: 'session_01VRAI' + n, claude_code_session_url: 'https://claude.ai/code/session_01VRAI' + n }),
+      { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const env = Object.assign({}, workerData.env, { PIECES_KV: PIECES_KV });
+  let base = '';
+  const serveur = http.createServer(async (req, res) => {
+    const morceaux = []; for await (const x of req) morceaux.push(x);
+    const corps = Buffer.concat(morceaux), u = new URL(req.url, 'http://x');
+    const repondre = (statut, o) => { res.writeHead(statut, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (u.pathname.startsWith('/__test/')) {
+      const q = corps.length ? JSON.parse(corps.toString()) : {}, quoi = u.pathname.slice(8);
+      if (quoi === 'decalage') { decalage = Number(q.ms) || 0; return repondre(200, { ok: true }); }
+      if (quoi === 'routine') { Object.assign(reponses, q); return repondre(200, { ok: true }); }
+      if (quoi === 'appels') return repondre(200, appels);
+      if (quoi === 'journal') return repondre(200, journal);
+      if (quoi === 'kv') { const pr = u.searchParams.get('prefixe') || ''; return repondre(200, [...objets.keys()].filter((k) => k.startsWith(pr) && lu(k))); }
+      return repondre(404, {});
+    }
+    if (req.method !== 'OPTIONS') journal.push({ m: req.method, p: u.pathname, par: req.headers.authorization ? 'session' : req.headers['x-signaler-cle'] ? 'cle' : '' });
+    try {
+      const r = new Request(base + req.url, { method: req.method, headers: req.headers, body: req.method === 'POST' ? corps : undefined });
+      const rep = await worker.fetch(r, env);
+      res.writeHead(rep.status, Object.fromEntries(rep.headers)); res.end(Buffer.from(await rep.arrayBuffer()));
+    } catch (e) { res.writeHead(500); res.end(String(e && e.message)); }
+  });
+  serveur.listen(0, '127.0.0.1', () => { base = 'http://127.0.0.1:' + serveur.address().port; parentPort.postMessage({ base: base }); });
+})().catch((e) => parentPort.postMessage({ erreur: String((e && e.stack) || e) }));
+`;
+const LOCALHOST = 'http://localhost:' + site.address().port;   // la page de la section 11 : localhost (l'empreinte veut un nom, pas une IP)
+const fil = new Worker(FIL_RELAIS, { eval: true, workerData: { url: pathToFileURL(join(RACINE, 'relay', 'cloudflare', 'worker.mjs')).href, bavard: !!process.env.SIGNALER_JOURNAL, env: {
+  ORIGINES: LOCALHOST, DEPOT: '770lab/home', MONTRER_SUIVI: 'oui', CLES: 'marie:' + CLE + ',paul:' + CLE_PAUL,
+  ROUTINE_URL: 'https://api.anthropic.com/v1/claude_code/routines/trig_01UN/fire', ROUTINE_JETON: 'sk-ant-oat01-FAUX-UN',
+  ROUTINE_URL_2: 'https://api.anthropic.com/v1/claude_code/routines/trig_02DEUX/fire', ROUTINE_JETON_2: 'sk-ant-oat01-FAUX-DEUX',
+  SESSION_SECRET: randomBytes(32).toString('hex') } } });   // un secret tiré pour ce test seulement, jamais écrit ni montré
+const VRAI = await new Promise((ok, ko) => { fil.once('message', (m) => (m && m.base ? ok(m.base) : ko(new Error(m && m.erreur)))); fil.once('error', ko); });
+const ctl = async (quoi, corps) => (await fetch(VRAI + '/__test/' + quoi, corps === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) })).json();
+
 const navigateur = await chromium.launch({ args: ['--host-resolver-rules=MAP 770lab.com 127.0.0.1'] });
 const H2C = join(RACINE, 'tests', '.cache', 'html2canvas-1.4.1.min.js');
+// html2canvas, enveloppé : window.__h2cDelai (ms) retarde la photo, pour voir le rond PENDANT qu'elle se fait.
+const H2C_RETARD = '\n;(function(){var v=window.html2canvas;if(!v)return;window.html2canvas=function(e,o){var d=window.__h2cDelai||0;'
+  + 'return new Promise(function(r){setTimeout(r,d)}).then(function(){return v(e,o)})}})();';
+// o.toucher : écran tactile (hasTouch ; isMobile jusqu'à 768 px) · o.mouvement : 'reduce' pour prefers-reduced-motion
 async function page(taille, o = {}) {
-  const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light' });
+  const ctx = await navigateur.newContext({ viewport: taille, permissions: [], colorScheme: o.theme || 'light', hasTouch: !!o.toucher,
+    isMobile: !!o.toucher && taille.width <= 768, reducedMotion: o.mouvement || 'no-preference' });
   if (o.cle) await ctx.addInitScript((k) => { try { if (!localStorage.getItem('signaler_cle_v1')) localStorage.setItem('signaler_cle_v1', k); } catch (e) {} }, o.cle);
   if (o.init) await ctx.addInitScript(o.init);
   const p = await ctx.newPage();
-  if (existsSync(H2C)) await p.route('https://cdnjs.cloudflare.com/**', (route) => route.fulfill({ contentType: 'text/javascript', body: readFileSync(H2C, 'utf8') }));
+  await p.route('https://cdnjs.cloudflare.com/**', async (route) => {
+    const corps = existsSync(H2C) ? readFileSync(H2C, 'utf8') : await (await route.fetch()).text();
+    return route.fulfill({ contentType: 'text/javascript', body: corps + H2C_RETARD });
+  });
   const erreursPage = []; p.on('pageerror', (e) => erreursPage.push(String(e)));
   // o.chemin : une autre page que la démo (/home/, /home/robots.html…) · o.projet : ?projet= (SignalerConfig.projet de la démo)
-  // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site)
+  // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site) · o.csp : la CSP des images du pupitre
   await p.goto((o.origine || ORIGINE) + (o.chemin || '/demo/index.html') + '?relais=' + encodeURIComponent(o.relais || RELAIS)
-    + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : ''));
+    + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : '')
+    + (o.csp ? '&csp=img' : ''));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
-const capture = (p, nom) => p.screenshot({ path: join(CAPTURES, nom) });
+const capture = (p, nom) => p.screenshot({ path: join(CAPTURES, PREFIXE + nom) });
 
 // Ce que la règle de l'interface interdit, mesuré dans la page : défilement en largeur, élément qui dépasse de la fenêtre,
 // rangée de plus de 3 boutons, italique, émoji (texte, aria-label, title, placeholder, alt).
@@ -205,7 +303,7 @@ async function controler(p) {
     const pb = [], de = document.documentElement;
     const nom = (e) => e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\s+/).join('.') : '') + ' « ' + (e.textContent || '').trim().slice(0, 30) + ' »';
     if (de.scrollWidth > de.clientWidth) pb.push('la page défile en largeur (' + de.scrollWidth + ' > ' + de.clientWidth + ')');
-    const tous = [...document.querySelectorAll('.sgn-fab, .sgn-fab *, .sgn-badge, .sgn-fond, .sgn-fond *')];
+    const tous = [...document.querySelectorAll('.sgn-fab, .sgn-fab *, .sgn-badge, .sgn-fond, .sgn-fond *, .sgn-bulle, .sgn-bulle *, .sgn-vis, .sgn-vis *')];
     const RX = /\p{Extended_Pictographic}/u;
     for (const e of tous) {
       if (getComputedStyle(e).fontStyle !== 'normal') pb.push('italique : ' + nom(e));
@@ -213,7 +311,7 @@ async function controler(p) {
       for (const n of e.childNodes) if (n.nodeType === 3 && RX.test(n.nodeValue)) pb.push('émoji : ' + n.nodeValue.trim().slice(0, 40));
       for (const a of ['aria-label', 'title', 'placeholder', 'alt']) { const v = e.getAttribute(a); if (v && RX.test(v)) pb.push('émoji (' + a + ') : ' + v); }
     }
-    for (const sel of ['.sgn-fab', '.sgn-badge']) {
+    for (const sel of ['.sgn-fab', '.sgn-badge', '.sgn-bulle']) {
       const e = document.querySelector(sel); if (!e || getComputedStyle(e).display === 'none') continue;
       const r = e.getBoundingClientRect();
       if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) pb.push(sel + ' sort de l’écran');
@@ -229,7 +327,17 @@ async function controler(p) {
         if (r.left < b.left - 0.5 || r.right > b.right + 0.5) pb.push('dépasse de la fenêtre : ' + nom(e));
         if (!e.closest('.sgn-vignettes') && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 1) pb.push('contenu plus large que sa boîte : ' + nom(e));
       }
-      const clics = [...boite.querySelectorAll('button, a[href], label.sgn-bouton')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('.sgn-v'); });
+    }
+    // La capture en plein écran : tout tient dans l'écran.
+    const vis = document.querySelector('.sgn-vis');
+    if (vis) for (const e of [vis, ...vis.querySelectorAll('*')]) {
+      const r = e.getBoundingClientRect();
+      if ((r.width || r.height) && (r.left < -0.5 || r.top < -0.5 || r.right > innerWidth + 0.5 || r.bottom > innerHeight + 0.5)) pb.push('sort de l’écran (visionneuse) : ' + nom(e));
+    }
+    // Pas plus de 3 boutons par rangée, dans la fenêtre, la bulle et la visionneuse (les vignettes des écrans sont une galerie).
+    for (const zone of document.querySelectorAll('.sgn-boite, .sgn-bulle, .sgn-vis')) {
+      if (getComputedStyle(zone).display === 'none') continue;
+      const clics = [...zone.querySelectorAll('button, a[href], label.sgn-bouton')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('.sgn-v'); });
       const rangs = [];
       for (const e of clics) {
         const r = e.getBoundingClientRect(), c = r.top + r.height / 2;
@@ -244,6 +352,7 @@ async function controler(p) {
 }
 
 try {
+  if (process.env.SIGNALER_SEULEMENT !== '11') {
   console.log('1. Un signalement complet, sur téléphone (390 × 844)');
   const { p, ctx, erreursPage } = await page({ width: 390, height: 844 });
   await p.click('#panne');                                   // une erreur dans la console de la page
@@ -256,17 +365,19 @@ try {
   await p.waitForSelector('.sgn-boite');
   await p.waitForSelector('.sgn-v img', { timeout: 15000 });
   ok((await p.$$('.sgn-v img')).length === 1, 'l’écran est photographié AVANT que la fenêtre s’ouvre (une capture)');
-  // Sous un contenu plus court que l'écran, la capture prend le fond de la page — pas du noir (le transparent en JPEG).
+  // Là où rien n'est peint (sous un contenu plus court que l'écran, ou dans la marge de la page, ici le coin bas gauche), la
+  // capture prend le fond de la page — pas du noir (le transparent en JPEG).
   const basDeCapture = await p.evaluate(() => new Promise((ok) => {
     const img = new Image();
     img.onload = () => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
-      const d = g.getImageData(Math.floor(img.width / 2), img.height - 5, 1, 1).data; ok(d[0] + d[1] + d[2]); };
+      const d = g.getImageData(4, img.height - 5, 1, 1).data; ok(d[0] + d[1] + d[2]); };
     img.src = window.Signaler._etat().captures[0].donnees;
   }));
   ok(basDeCapture > 600, 'le bas de la capture a la couleur du fond de la page, pas du noir (somme RVB ' + basDeCapture + ')');
   const bb = await (await p.$('.sgn-boite')).boundingBox();
   ok(bb.width <= 390 && bb.x >= 0, 'la fenêtre tient dans la largeur du téléphone');
-  ok(!!(await p.$('.sgn-cle')), 'la première fois, la clé d’équipe est demandée');
+  ok(!!(await p.waitForSelector('.sgn-cle', { timeout: 5000 }).catch(() => null)) && !(await p.$('[data-a="empreinte"]')) && faux.auth.includes('POST /auth/options/connexion'),
+    'la première fois, sur un relais où l’empreinte n’est pas réglée (503) : la clé d’équipe est demandée, comme avant');
   ok(/Mes demandes/.test(await texte(p, '.sgn-tete')), 'l’en-tête propose « Mes demandes »');
   await p.click('[data-a="capturer"]');
   await p.waitForFunction(() => document.querySelectorAll('.sgn-v img').length === 2, null, { timeout: 15000 });
@@ -409,7 +520,7 @@ try {
   const ATTENDU = [
     ['a1b2c3d4e5f6', 'question', 'Pupitre', ['Ouvrir dans Claude']],
     ['b2c3d4e5f6a1', 'à relire', 'Home', ['Ouvrir dans Claude', 'Voir la PR']],
-    ['c3d4e5f6a1b2', 'pas partie', 'HavroutIA', ['Ouvrir dans Claude', 'Voir la PR', 'Renvoyer']],
+    ['c3d4e5f6a1b2', 'pas partie', 'HavroutIA', ['Renvoyer', 'Ouvrir dans Claude', 'Voir la PR']],
     ['d4e5f6a1b2c3', 'en cours', 'Avinou Malkenou', ['Ouvrir dans Claude']],
     ['9f8e7d6c5b4a', 'pas partie', 'Avinou Malkenou', ['Renvoyer']],
     ['e5f6a1b2c3d4', 'en cours', 'KOULAM', []],
@@ -426,6 +537,7 @@ try {
   const ext = cartes.flatMap((c) => c.actions.filter((a) => a.href));
   ok(ext.length === 7 && ext.every((a) => a.target === '_blank' && /noopener/.test(a.rel) && /^https:\/\//.test(a.href)), 'les liens s’ouvrent dans un nouvel onglet, rel noopener, https seulement');
   ok(cartes[0].actions[0].href === 'https://claude.ai/code/session_01QUESTION' && cartes[1].actions[1].href === 'https://github.com/770lab/home/pull/42', '« Ouvrir dans Claude » = la session, « Voir la PR » = le premier lien');
+  ok(await m.p.$eval('.sgn-carte[data-id="c3d4e5f6a1b2"]', (c) => { const r = c.querySelectorAll('.sgn-actions'); return r.length === 2 && r[0].textContent === 'Renvoyer'; }), 'deux rangées : ce qu’on peut faire (« Renvoyer »), puis les liens');
   ok(cartes[0].resume.includes('faut-il compter aussi') && cartes[2].resume.includes('statut 503'), 'le résumé de Claude, et pour une demande pas partie, pourquoi');
   ok(cartes[8].texte === '(capture seule, sans texte)', 'une demande sans texte le dit');
   const x5 = cartes.find((c) => c.id === 'e5f6a1b2c3d4');
@@ -438,7 +550,7 @@ try {
   faux.base.marie.find((x) => x.id === '9f8e7d6c5b4a').etat = 'envoyee';
   let lus = faux.appelsDemandes;
   await m.p.click('.sgn-carte[data-id="9f8e7d6c5b4a"] [data-a="renvoyer"]');
-  await m.p.waitForFunction(() => /plus « pas partie »/.test(document.querySelector('.sgn-etat').textContent));
+  await m.p.waitForFunction(() => /déjà repartie/.test(document.querySelector('.sgn-etat').textContent));
   ok(faux.appelsDemandes > lus && (await texte(m.p, '.sgn-carte[data-id="9f8e7d6c5b4a"] .sgn-pil')) === 'en cours' && faux.renvois.length === 0, 'déjà repartie (409) : on le dit, la liste est relue, rien n’est renvoyé');
   lus = faux.appelsDemandes;
   await m.p.click('.sgn-carte[data-id="c3d4e5f6a1b2"] [data-a="renvoyer"]');
@@ -766,9 +878,661 @@ try {
   ok(!(await pr.p.$('.sgn-puce')), 'Signaler.demandes(\'toutes\') (le pupitre d’avant) : sans puce, comme avant');
   ok(!pr.erreursPage.length, 'aucune erreur JavaScript');
   await pr.ctx.close();
+  console.log('10. Le rond déplacé, la photo, le dessin, plusieurs écrans, la boîte noire, le point rouge (360 → 1280, clair = doigt, sombre = souris)');
+  // Le doigt passe par le protocole de Chrome (Playwright ne sait que « tap ») : de vrais pointerdown / move / up de type touch.
+  const cdps = new WeakMap();
+  const doigt = async (p, type, x, y) => {
+    if (!cdps.has(p)) cdps.set(p, await p.context().newCDPSession(p));
+    await cdps.get(p).send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }] });
+  };
+  const toucherEl = (p, toucher, sel) => (toucher ? p.tap(sel) : p.click(sel));
+  // Un geste qui suit des points ; attente : avant de bouger (appui long) ; auMilieu : appelé pendant l'appui, avant de bouger.
+  async function geste(p, toucher, pts, o = {}) {
+    const [x0, y0] = pts[0];
+    if (toucher) await doigt(p, 'touchStart', x0, y0); else { await p.mouse.move(x0, y0); await p.mouse.down(); }
+    if (o.auMilieu) { await attendre(140); await o.auMilieu(); }
+    if (o.attente) await attendre(Math.max(0, o.attente - (o.auMilieu ? 140 : 0)));
+    // À la vitesse d'une main (une image sur 60), et le doigt s'arrête avant de se lever : sinon Chrome y voit un « lancer »
+    // et écarte le toucher suivant (il le prend pour l'arrêt du lancer).
+    for (const [x, y] of pts.slice(1)) { if (toucher) { await doigt(p, 'touchMove', x, y); await attendre(16); } else await p.mouse.move(x, y); }
+    if (toucher) { await attendre(150); await doigt(p, 'touchEnd'); await attendre(300); } else await p.mouse.up();
+  }
+  const ligne = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]);
+  const ellipse = (cx, cy, rx, ry, n = 28) => Array.from({ length: n + 1 }, (_, i) => [cx + rx * Math.cos(2 * Math.PI * i / n), cy + ry * Math.sin(2 * Math.PI * i / n)]);
+  const boite = (p, sel) => p.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; });
+  const brouillonGarde = (p) => p.evaluate(() => { try { const o = JSON.parse(sessionStorage.getItem('signaler_brouillon_v1') || 'null'); return o ? { n: o.captures.length, texte: o.texte, traits: o.captures.map((c) => c.traits.length), attente: o.attente } : null; } catch (e) { return 'illisible'; } });
+  const pastille = (p) => p.evaluate(() => { const f = document.querySelector('.sgn-fab'), x = f && f.querySelector('.sgn-pastille'); return f && f.classList.contains('sgn-attente') && getComputedStyle(x).display !== 'none' ? x.textContent : ''; });
+  const bulleVue = (p) => p.evaluate(() => { const b = document.querySelector('.sgn-bulle'); return b && getComputedStyle(b).display !== 'none' ? [...b.querySelectorAll('p, button')].map((x) => x.textContent.trim()).join(' | ') : ''; });
+  const ouvrirAvecPhoto = async (p, toucher, n) => {
+    await toucherEl(p, toucher, '.sgn-fab');
+    await p.waitForFunction((k) => document.querySelector('.sgn-toile canvas') && window.Signaler._etat().captures.length === k, n, { timeout: 20000 });
+  };
+  const SECRET_TEXTE = 'secret-texte-123', SECRET_MDP = 'MotDePasse-Secret-456', ERREUR_DEMO = 'Le calcul du total a planté (démo)';
+  for (const [w, ht] of [[360, 780], [412, 915], [768, 1024], [1280, 900]]) {
+    for (const theme of ['light', 'dark']) {
+      const toucher = theme === 'light', nom = 'rond-' + w + '-' + theme, dit = w + ' px ' + (toucher ? 'au doigt' : 'à la souris') + ' (' + (theme === 'light' ? 'clair' : 'sombre') + ')';
+      remettre();
+      const x = await page({ width: w, height: ht }, { cle: CLE, theme, toucher });
+      const p = x.p;
+      await p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
+      let pbs = [];
+      // a) Le point rouge : une vraie erreur, une fois ; « Ignorer » l'éteint ; la même erreur ne revient pas.
+      await toucherEl(p, toucher, '#lancer-erreur');
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      const a1 = await p.evaluate(() => ({ point: getComputedStyle(document.querySelector('.sgn-point')).display !== 'none', label: document.querySelector('.sgn-fab').getAttribute('aria-label') }));
+      ok(a1.point && (await bulleVue(p)) === 'Un problème vient d’arriver sur cette page. Le signaler ? | Signaler | Ignorer' && /Un problème vient d’arriver/.test(a1.label), dit + ' : une erreur de la page allume le point rouge et la bulle « Le signaler ? »');
+      pbs = pbs.concat(await controler(p));
+      const bb1 = await boite(p, '.sgn-bulle'), fb1 = await boite(p, '.sgn-fab');
+      ok(bb1.y + bb1.h <= fb1.y && bb1.x >= 0 && bb1.x + bb1.w <= w, dit + ' : la bulle est juste au-dessus du rond, à l’écran');
+      await p.waitForTimeout(300);   // la bulle entre en fondu (0,18 s)
+      await capture(p, nom + '-alerte.png');
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-ignorer"]');
+      ok(!(await bulleVue(p)) && !(await p.evaluate(() => document.querySelector('.sgn-fab').classList.contains('sgn-alerte'))), dit + ' : « Ignorer » ferme la bulle et éteint le point');
+      await toucherEl(p, toucher, '#lancer-erreur');
+      await p.evaluate(() => { const x = new XMLHttpRequest(); x.open('GET', '/api/panne-xhr?jeton=xhr-secret'); x.send(); });
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      ok(true, dit + ' : la même erreur une seconde fois ne rallume rien ; une requête XMLHttpRequest en 503 (autre problème) rallume la bulle');
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-ignorer"]');
+      // b) La boîte noire : deux champs (texte, mot de passe), une requête 404, une ancre, un défilement.
+      await p.fill('#champ-nom', SECRET_TEXTE);
+      await p.focus('#champ-mdp'); await p.keyboard.type(SECRET_MDP);
+      await p.evaluate(() => fetch('/api/absent?cle=zzz').then(() => {}, () => {}));
+      await toucherEl(p, toucher, '#vers-bas');
+      await p.waitForTimeout(500);
+      await p.evaluate(() => { document.activeElement && document.activeElement.blur && document.activeElement.blur(); window.scrollTo(0, 0); });
+      await p.waitForTimeout(500);
+      ok(!(await bulleVue(p)), dit + ' : une requête en 404 n’allume rien (seulement 5xx et réseau)');
+      // c) Déplacer le rond : appui long 0,45 s puis glisser ; il s'enfonce dès l'appui ; ce n'est pas un toucher.
+      const f0 = await boite(p, '.sgn-fab'), but = [12 + 24 + 30, Math.round(ht * 0.62)];
+      let enfonce = 1;
+      await geste(p, toucher, ligne([f0.cx, f0.cy], but, 14), { attente: 450, auMilieu: async () => { enfonce = await p.$eval('.sgn-fab', (e) => new DOMMatrix(getComputedStyle(e).transform).a); } });
+      await p.waitForTimeout(250);
+      const f1 = await boite(p, '.sgn-fab'), b1 = await boite(p, '.sgn-badge');
+      const pos = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('signaler_pos_v1') || '{}')[location.origin + location.pathname] || null; } catch (e) { return null; } });
+      ok(enfonce < 0.95, dit + ' : à l’appui, le rond s’enfonce (échelle ' + enfonce.toFixed(2) + ')');
+      ok(Math.abs(f1.cx - but[0]) <= 2 && Math.abs(f1.cy - but[1]) <= 2 && await p.$eval('.sgn-fab', (e) => e.classList.contains('sgn-deplace')), dit + ' : appui long puis glisser, le rond suit (' + Math.round(f1.cx) + ', ' + Math.round(f1.cy) + ')');
+      ok(!(await p.$('.sgn-boite')) && (await p.evaluate(() => window.Signaler._etat().captures.length)) === 0, dit + ' : le déplacer n’ouvre pas la fenêtre et ne photographie rien');
+      ok(b1.x < f1.x + f1.w + 10 && b1.x + b1.w > f1.x + f1.w - 14 && b1.y < f1.y && b1.y + b1.h > f1.y, dit + ' : le nombre rouge suit le rond (son coin haut droit)');
+      ok(pos && pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1, dit + ' : la place est gardée pour cette page, en proportion (' + (pos ? pos.x + ', ' + pos.y : 'rien') + ')');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-deplace.png');
+      // Glissé hors de l'écran : il reste dedans, loin des bords.
+      const f2 = await boite(p, '.sgn-fab');
+      await geste(p, toucher, ligne([f2.cx, f2.cy], [w + 60, -60], 10), { attente: 450 });
+      await p.waitForTimeout(250);
+      const f3 = await boite(p, '.sgn-fab');
+      ok(f3.x + f3.w <= w - 11 && f3.y >= 15, dit + ' : tiré hors de l’écran, il s’arrête à 12 px du bord (' + Math.round(w - f3.x - f3.w) + ' px, haut ' + Math.round(f3.y) + ' px)');
+      await geste(p, toucher, ligne([f3.cx, f3.cy], but, 10), { attente: 450 });
+      await p.waitForTimeout(250);
+      // d) Une requête en échec (500) : la bulle ; « Signaler » photographie l'écran (l'anneau tourne pendant ce temps) puis ouvre la fenêtre.
+      await toucherEl(p, toucher, '#requete-ko');
+      await p.waitForSelector('.sgn-bulle', { state: 'visible', timeout: 3000 });
+      const bb2 = await boite(p, '.sgn-bulle'), fb2 = await boite(p, '.sgn-fab');
+      ok(bb2.y + bb2.h <= fb2.y && Math.abs(bb2.x - fb2.x) <= 1, dit + ' : une requête en 500 rallume la bulle, posée au-dessus du rond déplacé');
+      // Le haut de la page à l'écran (toucher le bouton l'a fait défiler) : « Enregistrer » sera sur la photo.
+      await p.evaluate(() => window.scrollTo(0, 0));
+      await p.waitForTimeout(400);
+      await p.evaluate(() => { window.__h2cDelai = 1500; });
+      await toucherEl(p, toucher, '.sgn-bulle [data-a="b-signaler"]');
+      await p.waitForSelector('.sgn-fab.sgn-occupe', { timeout: 3000 });
+      await p.waitForTimeout(450);
+      const anim = await p.evaluate(() => {
+        const f = document.querySelector('.sgn-fab'), st = (s) => getComputedStyle(f.querySelector(s));
+        return { occupe: f.classList.contains('sgn-occupe'), anneau: st('.sgn-anneau').opacity + ' ' + st('.sgn-anneau').animationName, onde: st('.sgn-onde').animationName,
+          etoile: st('.sgn-etoile').animationName, fenetre: !!document.querySelector('.sgn-boite'), bulle: !!document.querySelector('.sgn-bulle') && getComputedStyle(document.querySelector('.sgn-bulle')).display !== 'none' };
+      });
+      ok(anim.occupe && anim.anneau === '1 sgn-tourne' && anim.onde === 'sgn-onde' && anim.etoile === 'sgn-tourne' && !anim.fenetre && !anim.bulle,
+        dit + ' : pendant la photo, l’anneau tourne, l’onde s’échappe, l’étoile tourne (' + anim.anneau + ', ' + anim.onde + ', ' + anim.etoile + ')');
+      await capture(p, nom + '-photo.png');
+      await p.evaluate(() => { window.__h2cDelai = 0; });
+      await p.waitForSelector('.sgn-toile canvas', { timeout: 20000 });
+      ok((await p.inputValue('.sgn-texte')) === 'Une requête a échoué : GET /api/panne (erreur 500)' && (await p.getAttribute('.sgn-type[data-v="bug"]', 'aria-pressed')) === 'true',
+        dit + ' : « Signaler » ouvre un bug, avec la ligne « ' + (await p.inputValue('.sgn-texte')) + ' »');
+      // e) Le dessin : une ellipse autour du bouton « Enregistrer » de la capture.
+      const geo = await p.evaluate(() => {
+        const c = document.querySelector('.sgn-toile canvas').getBoundingClientRect(), b = document.getElementById('panne').getBoundingClientRect(), cap = window.Signaler._etat().captures[0];
+        return { c: { x: c.left, y: c.top, w: c.width, h: c.height }, b: { cx: b.left + b.width / 2, cy: b.top + b.height / 2, w: b.width, h: b.height }, vw: cap.vw, vh: cap.vh };
+      });
+      const sx = geo.c.w / geo.vw, sy = geo.c.h / geo.vh;
+      const tour = ellipse(geo.c.x + geo.b.cx * sx, geo.c.y + geo.b.cy * sy, geo.b.w * sx / 2 + 8, geo.b.h * sy / 2 + 8);
+      await geste(p, toucher, ligne([geo.c.x + 10, geo.c.y + 10], [geo.c.x + 40, geo.c.y + 30], 4));
+      ok(await p.evaluate(() => window.Signaler._etat().captures[0].traits.length === 1 && !document.querySelector('[data-a="gomme"]').disabled), dit + ' : un trait sur la capture, « Effacer le dessin » s’allume');
+      await toucherEl(p, toucher, '[data-a="gomme"]');
+      ok(await p.evaluate(() => window.Signaler._etat().captures[0].traits.length === 0 && document.querySelector('[data-a="gomme"]').disabled), dit + ' : « Effacer le dessin » retire les traits');
+      await geste(p, toucher, tour);
+      const tr = await p.evaluate(() => { const t = window.Signaler._etat().captures[0].traits; return { n: t.length, e: t[0] && t[0].e, svg: document.querySelectorAll('.sgn-v[data-i="0"] svg polyline').length }; });
+      ok(tr.n === 1 && tr.e && tr.e.id === 'panne' && tr.e.balise === 'button' && tr.svg === 1, dit + ' : l’ellipse autour d’« Enregistrer » : l’élément dessous est ' + (tr.e ? tr.e.chemin + ' « ' + tr.e.texte + ' »' : 'introuvable') + ', la vignette porte le trait');
+      const rouge = await p.evaluate(() => { const c = document.querySelector('.sgn-toile canvas'), g = c.getContext('2d'), d = g.getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i] > 200 && d[i + 1] < 90) n++; return n; });
+      ok(rouge > 200, dit + ' : le trait rouge se voit sur la capture (' + rouge + ' points)');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-dessin.png');
+      // f) Plusieurs écrans : « + Un autre écran », la pastille blanche, un rechargement, cinq écrans en tout.
+      await toucherEl(p, toucher, '[data-a="autre"]');
+      ok(!(await p.$('.sgn-boite')) && (await pastille(p)) === '1' && /^Brouillon gardé \(1 écran\)/.test(await bulleVue(p)), dit + ' : « + Un autre écran » ferme la fenêtre, la pastille blanche dit 1, la bulle explique');
+      pbs = pbs.concat(await controler(p));
+      await p.waitForTimeout(300);
+      await capture(p, nom + '-attente.png');
+      await p.reload();
+      await p.waitForSelector('.sgn-fab');
+      await p.waitForTimeout(300);
+      const f4 = await boite(p, '.sgn-fab');
+      ok(Math.abs(f4.cx - but[0]) <= 1 && Math.abs(f4.cy - but[1]) <= 1 && (await pastille(p)) === '1', dit + ' : après un rechargement, le rond est à sa place et la pastille dit toujours 1');
+      for (let k = 2; k <= 5; k++) {
+        await ouvrirAvecPhoto(p, toucher, k);
+        if (k === 3) {
+          await toucherEl(p, toucher, '[data-a="autre"]');
+          await p.reload(); await p.waitForSelector('.sgn-fab'); await p.waitForTimeout(200);
+          ok((await pastille(p)) === '3', dit + ' : rechargé avec 3 écrans en attente, la pastille dit 3');
+          continue;
+        }
+        if (k < 5) await toucherEl(p, toucher, '[data-a="autre"]');
+      }
+      const plein = await p.evaluate(() => ({ n: document.querySelectorAll('.sgn-v img').length, ajout: document.querySelector('[data-a="autre"]').textContent, off: document.querySelector('[data-a="autre"]').disabled, capt: document.querySelector('[data-a="capturer"]').disabled }));
+      ok(plein.n === 5 && plein.off && plein.capt && plein.ajout === '5 écrans au plus', dit + ' : cinq écrans au plus (« ' + plein.ajout + ' »)');
+      pbs = pbs.concat(await controler(p));
+      await capture(p, nom + '-cinq.png');
+      await p.keyboard.press('Escape');
+      await p.reload(); await p.waitForSelector('.sgn-fab'); await p.waitForTimeout(200);
+      const garde = await brouillonGarde(p);
+      ok((await pastille(p)) === '5' && garde && garde.n === 5 && garde.traits[0] === 1 && garde.texte === 'Une requête a échoué : GET /api/panne (erreur 500)', dit + ' : le brouillon de 5 écrans survit au rechargement (texte et dessin compris)');
+      await toucherEl(p, toucher, '.sgn-fab');
+      await p.waitForSelector('.sgn-toile canvas', { timeout: 10000 });
+      ok((await p.$$('.sgn-v img')).length === 5 && await p.evaluate(() => window.Signaler._etat().captures.length === 5) && (await p.$$('.sgn-v[data-i="0"] svg polyline')).length === 1, dit + ' : le rond rouvre les 5 écrans sans en prendre un sixième');
+      // g) L'envoi : 5 images, la première avec son dessin ; les éléments ; la boîte noire, sans rien de tapé.
+      const n0 = faux.signalements.length;
+      await toucherEl(p, toucher, '.sgn-envoyer');
+      await p.waitForSelector('.sgn-etat.ok', { timeout: 20000 });
+      const corps = faux.signalements[n0] || {}, cx = corps.contexte || {}, j = Array.isArray(cx.journal) ? cx.journal : [];
+      ok(Array.isArray(corps.captures) && corps.captures.length === 5, dit + ' : les 5 écrans partent');
+      const el0 = (cx.elements || [])[0] || {};
+      ok((cx.elements || []).length === 1 && el0.id === 'panne' && el0.balise === 'button' && /button#panne/.test(el0.chemin) && /Enregistrer/.test(el0.texte) && el0.ecran === 1,
+        dit + ' : contexte.elements = ' + JSON.stringify(cx.elements || []).slice(0, 160));
+      const pixels = await p.evaluate(({ src, pts }) => new Promise((ok) => {
+        const img = new Image();
+        img.onload = () => { const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+          let r = 0; for (const [fx, fy] of pts) { const d = g.getImageData(Math.min(img.width - 1, Math.round(fx * img.width)), Math.min(img.height - 1, Math.round(fy * img.height)), 1, 1).data; if (d[0] > 170 && d[1] < 110 && d[2] < 110) r++; }
+          ok(r); };
+        img.onerror = () => ok(-1);
+        img.src = src;
+      }), { src: corps.captures[0].donnees, pts: tour.map(([px, py]) => [(px - geo.c.x) / geo.c.w, (py - geo.c.y) / geo.c.h]).filter(([fx, fy]) => fx > 0.01 && fx < 0.99 && fy > 0.01 && fy < 0.99) });
+      ok(pixels >= 20, dit + ' : l’image envoyée porte le dessin (' + pixels + ' points rouges sur le tracé)');
+      const types = (t, f) => j.filter((e) => e.type === t && (!f || f(e)));
+      const tape = toucher ? 'toucher' : 'clic';
+      ok(types(tape, (e) => /#lancer-erreur/.test(e.cible)).length >= 1 && types(tape, (e) => /#vers-bas/.test(e.cible)).length === 1, dit + ' : boîte noire, les ' + (toucher ? 'touchers' : 'clics') + ' (« ' + (types(tape)[0] || {}).cible + ' »)');
+      ok(types('saisie', (e) => /^input\[text\]#champ-nom « Nom du client »$/.test(e.cible) && e.detail === 'validée').length === 1
+        && types('saisie', (e) => /^input\[password\]#champ-mdp « Mot de passe »$/.test(e.cible) && e.detail === 'validée').length === 1,
+        dit + ' : boîte noire, une ligne par champ, sans sa valeur (« ' + types('saisie').map((e) => e.cible).join(' », « ') + ' »)');
+      ok(types('page', (e) => e.cible === '/demo/index.html#bas' && e.detail === 'ancre').length === 1 && types('page', (e) => e.detail === 'chargement').length >= 1, dit + ' : boîte noire, les pages (chargement, ancre #bas)');
+      ok(types('defilement', (e) => e.cible === 'page' && /^y = \d+ px/.test(e.detail)).length >= 1, dit + ' : boîte noire, le défilement');
+      ok(types('erreur', (e) => e.detail.endsWith(ERREUR_DEMO) && /\.html:\d+$/.test(e.cible)).length >= 1, dit + ' : boîte noire, l’erreur de la page');
+      ok(types('requete', (e) => e.cible === 'GET /api/panne' && e.detail === 'statut 500').length === 1 && types('requete', (e) => e.cible === 'GET /api/panne-xhr' && e.detail === 'statut 503').length === 1
+        && types('requete', (e) => e.cible === 'GET /api/absent' && e.detail === 'statut 404').length === 1, dit + ' : boîte noire, les requêtes en échec (500, 503, 404), sans « ?… »');
+      ok(j.length > 0 && j.length <= 200 && j.every((e) => typeof e.t === 'number' && e.t >= 0 && typeof e.cible === 'string' && typeof e.detail === 'string')
+        && !j.some((e) => /sgn-|Signaler à Claude|Un autre écran/.test(e.cible)), dit + ' : ' + j.length + ' lignes, chacune avec t (ms avant l’envoi) ; rien du bouton lui-même');
+      const brut = JSON.stringify(corps), texteRoutine = (appels[appels.length - 1] || {}).text || '';
+      ok(![SECRET_TEXTE, SECRET_MDP, 'jeton=', 'demo-secret', 'xhr-secret', 'cle=zzz'].some((s) => brut.includes(s) || texteRoutine.includes(s)), dit + ' : ni le texte tapé, ni le mot de passe, ni « ?jeton=… » ne partent (corps envoyé et texte de la routine)');
+      ok(!(await brouillonGarde(p)) && !(await pastille(p)), dit + ' : envoyé, le brouillon est effacé (plus de pastille)');
+      await p.keyboard.press('Escape');
+      // h) Tourner l'écran : le rond déplacé est ramené dans l'écran.
+      await p.setViewportSize({ width: ht, height: w });
+      await p.waitForTimeout(250);
+      const f5 = await boite(p, '.sgn-fab');
+      ok(f5.x >= 11 && f5.x + f5.w <= ht - 11 && f5.y >= 15 && f5.y + f5.h <= w - 11, dit + ' : écran tourné (' + ht + ' × ' + w + '), le rond reste dans l’écran');
+      await p.setViewportSize({ width: w, height: ht });
+      await p.waitForTimeout(250);
+      // i) « Remettre le bouton à sa place ».
+      await ouvrirAvecPhoto(p, toucher, 1);
+      await toucherEl(p, toucher, '[data-a="remettre"]');
+      ok((await texte(p, '.sgn-etat')) === 'Le bouton est revenu à sa place.' && !(await p.$('[data-a="remettre"]'))
+        && !(await p.evaluate(() => document.querySelector('.sgn-fab').classList.contains('sgn-deplace') || !!JSON.parse(localStorage.getItem('signaler_pos_v1') || '{}')[location.origin + location.pathname])), dit + ' : « Remettre le bouton à sa place »');
+      await p.keyboard.press('Escape');
+      const f6 = await boite(p, '.sgn-fab');
+      ok(Math.abs(f6.x + f6.w - (w - 18)) <= 1 && Math.abs(f6.y + f6.h - (ht - 18)) <= 1 && !(await pastille(p)), dit + ' : revenu en bas à droite ; la fenêtre fermée sans rien y mettre ne laisse pas de brouillon');
+      // j) Signaler.oublier() : brouillon, liste et boîte noire effacés ; la clé reste.
+      await ouvrirAvecPhoto(p, toucher, 1);
+      await p.fill('.sgn-texte', 'À oublier');
+      await toucherEl(p, toucher, '[data-a="autre"]');
+      ok((await pastille(p)) === '1' && (await p.evaluate(() => window.Signaler._journal().length)) > 0, dit + ' : un brouillon en attente, une boîte noire pleine');
+      await p.evaluate(() => window.Signaler.oublier());
+      const apres = await p.evaluate(() => ({ b: sessionStorage.getItem('signaler_brouillon_v1'), j: window.Signaler._journal().length, n: window.Signaler._etat().captures.length, badge: getComputedStyle(document.querySelector('.sgn-badge')).display, cle: !!localStorage.getItem('signaler_cle_v1') }));
+      ok(!apres.b && !apres.j && !apres.n && apres.badge === 'none' && apres.cle && !(await pastille(p)), dit + ' : Signaler.oublier() efface le brouillon, la liste gardée et la boîte noire ; la clé reste');
+      const vraies = x.erreursPage.filter((e) => !e.includes(ERREUR_DEMO));
+      ok(!pbs.length && !vraies.length, dit + ' : rien ne déborde, pas plus de 3 boutons par rangée, ni italique ni émoji' + (pbs.length ? ' — ' + [...new Set(pbs)].join(' ; ') : '') + (vraies.length ? ' — ' + vraies.join(' ; ') : ''));
+      await x.ctx.close();
+    }
+  }
+  // Mouvement réduit : rien ne tourne ni ne pulse, l'anneau plein dit quand même « je travaille ».
+  remettre();
+  const rm = await page({ width: 412, height: 915 }, { mouvement: 'reduce' });
+  await rm.p.waitForSelector('.sgn-fab');
+  await rm.p.evaluate(() => { window.__h2cDelai = 1200; });
+  await rm.p.click('.sgn-fab');
+  await rm.p.waitForSelector('.sgn-fab.sgn-occupe', { timeout: 3000 });
+  await rm.p.waitForTimeout(300);
+  const calme = await rm.p.evaluate(() => { const f = document.querySelector('.sgn-fab'), st = (s) => getComputedStyle(f.querySelector(s)); return [st('.sgn-anneau').opacity, st('.sgn-anneau').animationName, st('.sgn-onde').opacity, st('.sgn-etoile').animationName].join(' '); });
+  ok(calme === '1 none 0 none', 'prefers-reduced-motion : pendant la photo, l’anneau est là mais immobile, pas d’onde (' + calme + ')');
+  await capture(rm.p, 'rond-412-mouvement-reduit.png');
+  await rm.ctx.close();
+  }
+  {   // (un bloc : ses noms ne croisent pas ceux des sections d'avant)
+  console.log('11. Le VRAI relais (Worker entier, KV en mémoire) et l’empreinte de Chrome (authentificateur virtuel) : connexion, cartes avant / après, Annuler, Mettre en ligne, l’autre abonnement');
+  // Un appareil avec son empreinte (Touch ID, capteur du téléphone) : l'authentificateur virtuel de Chrome, qui dit « oui » à la
+  // vérification de la personne. cles : des clés d'accès à y recopier (le même téléphone, dans une autre page).
+  const authentificateur = async (p, cles = []) => {
+    const cdp = await p.context().newCDPSession(p);
+    await cdp.send('WebAuthn.enable', { enableUI: false });
+    const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
+      hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+    for (const c of cles) await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: c });
+    return { cles: async () => (await cdp.send('WebAuthn.getCredentials', { authenticatorId })).credentials };
+  };
+  const copie = (c) => ({ credentialId: c.credentialId, isResidentCredential: true, rpId: c.rpId, privateKey: c.privateKey, userHandle: c.userHandle, signCount: c.signCount });
+  // Le doigt (protocole de Chrome) et la place d'un élément, comme en 10.
+  const cdps = new WeakMap();
+  const doigt = async (p, type, x, y) => {
+    if (!cdps.has(p)) cdps.set(p, await p.context().newCDPSession(p));
+    await cdps.get(p).send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }] });
+  };
+  const boite = (p, sel) => p.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; });
+  // Combien de fois la page a demandé l'empreinte (get) ou en a créé une (create).
+  const COMPTEUR = () => {
+    window.__webauthn = { get: 0, create: 0 };
+    try {
+      const c = navigator.credentials, g = c.get.bind(c), k = c.create.bind(c);
+      c.get = (o) => { window.__webauthn.get++; return g(o); };
+      c.create = (o) => { window.__webauthn.create++; return k(o); };
+    } catch (e) {}
+  };
+  const surVrai = (taille, o = {}) => page(taille, Object.assign({ origine: LOCALHOST, relais: VRAI, init: COMPTEUR }, o));
+  const webauthn = (p) => p.evaluate(() => window.__webauthn);
+  const sessionDe = (p) => p.evaluate(() => { try { return JSON.parse(localStorage.getItem('signaler_session_v1') || 'null'); } catch (e) { return 'illisible'; } });
+  const requetes = async () => (await ctl('journal')).filter((x) => x.m !== 'OPTIONS');
+  const derniere = async (chemin) => (await requetes()).filter((x) => x.p === chemin).pop() || {};
+  const ouvrirFenetre = async (p) => {
+    if (!(await p.$('.sgn-boite'))) await p.click('.sgn-fab', { position: { x: 24, y: 30 } });
+    await p.waitForSelector('.sgn-boite .sgn-texte', { timeout: 20000 });
+  };
+  const transmis = (p) => p.waitForFunction(() => /^Transmis à Claude/.test((document.querySelector('.sgn-etat.ok') || {}).textContent || ''), null, { timeout: 20000 });
+  const envoyerTexte = async (p, t) => { await ouvrirFenetre(p); await p.fill('.sgn-texte', t); await p.click('.sgn-envoyer'); await transmis(p); };
+  const etatDit = (p, rx, delai = 15000) => p.waitForFunction((s) => new RegExp(s).test((document.querySelector('.sgn-etat') || {}).textContent || ''), rx.source, { timeout: delai });
+  // Une demande de marie faite de serveur à serveur (sa clé, l'origine de la page), puis le RETOUR de la « routine » avec le jeton
+  // que le relais a écrit dans le texte qu'elle a reçu.
+  const enNode = (chemin, o = {}) => fetch(VRAI + chemin, { method: o.corps === undefined ? 'GET' : 'POST',
+    headers: Object.assign({ Origin: LOCALHOST, 'X-Signaler-Cle': o.cle || CLE }, o.corps === undefined ? {} : { 'Content-Type': 'application/json' }),
+    body: o.corps === undefined ? undefined : JSON.stringify(o.corps) }).then((r) => r.json());
+  const signalerNode = (t, url) => enNode('/signaler', { corps: { type: 'bug', texte: t, captures: [], contexte: { url: url || LOCALHOST + '/demo/index.html', titre: 'Démo' } } });
+  const jetonDe = async (ref) => {
+    const rx = new RegExp('"id":"' + ref + '","cle":"([0-9a-f]{32})"');
+    for (const a of (await ctl('appels')).reverse()) { const x = rx.exec(a.text || ''); if (x) return x[1]; }
+    return '';
+  };
+  const retourDe = async (ref, corps) => (await fetch(VRAI + '/retour', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ id: ref, cle: await jetonDe(ref) }, corps)) })).json();
+  const carteVue = (p, id) => p.$eval('.sgn-carte[data-id="' + id + '"]', (c) => ({
+    pil: c.querySelector('.sgn-pil').textContent, meta: c.querySelector('.sgn-carte-h').textContent.replace(/\s+/g, ' ').trim(),
+    notes: [...c.querySelectorAll('.sgn-carte-r')].map((x) => x.textContent).join(' / '),
+    rangs: [...c.querySelectorAll('.sgn-actions')].map((r) => [...r.children].map((x) => x.textContent.trim())),
+    vign: [...c.querySelectorAll('.sgn-ap')].map((b) => b.querySelector('span').textContent + ' ' + b.querySelector('img').getAttribute('src')) })).catch(() => null);
+  const imagesChargees = (p, sel) => p.waitForFunction((s) => [...document.querySelectorAll(s)].every((c) => [...c.querySelectorAll('img')].every((i) => i.complete && i.naturalWidth > 0)),
+    sel, { timeout: 8000 }).catch(() => null);
+  const versCarte = (p, id) => p.$eval('.sgn-carte[data-id="' + id + '"]', (c) => c.scrollIntoView({ block: 'start' }));
+  const actualiser = async (p, toucher) => { await (toucher ? p.tap('[data-a="actualiser"]') : p.click('[data-a="actualiser"]')); await p.waitForFunction(() => !document.querySelector('[data-a="actualiser"][disabled]') && !/Actualisation/.test(document.querySelector('.sgn-etat') ? document.querySelector('.sgn-etat').textContent : ''), null, { timeout: 15000 }); };
+
+  // a) Un appareil qui a la clé d'équipe : il envoie, puis « Activer l’empreinte sur cet appareil ? » (une fois).
+  const A = await surVrai({ width: 412, height: 915 }, { cle: CLE });
+  const telA = await authentificateur(A.p);
+  await envoyerTexte(A.p, 'Premier envoi avec la clé, sur le vrai relais');
+  ok((await derniere('/signaler')).par === 'cle', 'vrai relais : l’envoi part avec la clé d’équipe (X-Signaler-Cle)');
+  const offreVue = await A.p.waitForSelector('.sgn-offre', { timeout: 6000 }).catch(() => null);
+  ok(!!offreVue && /Activer l’empreinte sur cet appareil \?/.test(await texte(A.p, '.sgn-offre')) && (await requetes()).some((x) => x.m === 'GET' && x.p === '/auth/options/connexion'),
+    'envoyé avec la clé, l’empreinte réglée sur le relais (GET /auth/options/connexion, pas 503) : « Activer l’empreinte sur cet appareil ? » est proposé');
+  ok((await A.p.evaluate(() => localStorage.getItem('signaler_empreinte_proposee_v1'))) === '1', 'la proposition est notée dans ce navigateur (une seule fois)');
+  let pb11 = await controler(A.p);
+  await capture(A.p, 'empreinte-offre-412-light-a.png');
+  await A.p.waitForTimeout(8600);
+  ok(!!(await A.p.$('.sgn-offre')), 'tant que la proposition est là, la fenêtre ne se ferme pas d’elle-même (8 s)');
+  await A.p.click('[data-a="activer"]');
+  await etatDit(A.p, /Empreinte activée sur cet appareil/);
+  const clesA = await telA.cles(), sA = await sessionDe(A.p), appareils = await ctl('kv?prefixe=appareil:');
+  ok(clesA.length === 1 && clesA[0].isResidentCredential && clesA[0].rpId === 'localhost' && (await webauthn(A.p)).create === 1,
+    '« Activer l’empreinte » : une clé d’accès créée sur l’appareil (découvrable, rpId = localhost, le nom d’hôte de la page)');
+  ok(appareils.length === 1 && sA && sA.qui === 'marie' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(sA.session) && Math.abs(sA.exp - Date.now() - 12 * 3600000) < 120000,
+    'le relais l’a vérifiée (attestation, UP + UV) et rangée (appareil:<id>) ; la session de 12 h est gardée (signaler_session_v1, marie)');
+  ok(!(await A.p.$('.sgn-offre')) && /Connexion par empreinte \(marie\)/.test(await texte(A.p, '.sgn-pied')), 'la proposition disparaît ; le bas de la fenêtre dit « Connexion par empreinte (marie) »');
+  await envoyerTexte(A.p, 'Deuxième envoi : la session suffit');
+  ok((await derniere('/signaler')).par === 'session', 'l’envoi suivant passe par la session (Authorization: Bearer), plus par la clé');
+  await A.p.click('[data-a="deconnecter"]');
+  ok(!(await sessionDe(A.p)) && !!(await A.p.evaluate(() => localStorage.getItem('signaler_cle_v1'))) && /^Déconnecté sur cet appareil/.test(await texte(A.p, '.sgn-etat')),
+    '« Se déconnecter » : la session est oubliée, la clé d’équipe reste');
+  await envoyerTexte(A.p, 'Troisième envoi, de nouveau avec la clé');
+  await A.p.waitForTimeout(1500);
+  ok(!(await A.p.$('.sgn-offre')) && (await derniere('/signaler')).par === 'cle', 'de nouveau avec la clé : l’empreinte n’est pas reproposée (une seule fois)');
+  ok(!pb11.length && !A.erreursPage.length, 'la proposition : mise en page à 412 px' + (pb11.length ? ' — ' + pb11.join(' ; ') : '') + (A.erreursPage.length ? ' — ' + A.erreursPage.join(' ; ') : ''));
+  await A.ctx.close();
+
+  // b) Le même téléphone dans une page sans clé ni session : « Se connecter avec l’empreinte », « J’ai une clé ».
+  const Bp = await surVrai({ width: 412, height: 915 });
+  const telB = await authentificateur(Bp.p, clesA.map(copie));
+  await ouvrirFenetre(Bp.p);
+  await Bp.p.waitForTimeout(400);
+  ok(!!(await Bp.p.$('.sgn-acces [data-a="empreinte"]')) && !(await Bp.p.$('.sgn-cle')) && !!(await Bp.p.$('.sgn-acces [data-a="jaicle"]')),
+    'ni session ni clé : « Se connecter avec l’empreinte » à la place du champ de la clé, avec « J’ai une clé »');
+  ok((await requetes()).slice(-3).some((x) => x.m === 'POST' && x.p === '/auth/options/connexion' && !x.par), 'le défi est demandé d’avance, sans clé (l’empreinte part dans le geste même)');
+  await Bp.p.click('[data-a="jaicle"]');
+  ok(!!(await Bp.p.$('.sgn-acces .sgn-cle')) && !!(await Bp.p.$('.sgn-acces [data-a="sanscle"]')) && (await Bp.p.evaluate(() => document.activeElement && document.activeElement.classList.contains('sgn-cle'))),
+    '« J’ai une clé » : l’ancien champ (le curseur y est), avec de quoi revenir à l’empreinte');
+  await Bp.p.click('[data-a="sanscle"]');
+  ok(!!(await Bp.p.$('.sgn-acces [data-a="empreinte"]')), '« Se connecter avec l’empreinte » y ramène');
+  await Bp.p.fill('.sgn-texte', 'Envoyé sans clé : « Envoyer » demande l’empreinte');
+  await Bp.p.click('.sgn-envoyer');
+  await transmis(Bp.p);
+  const sB = await sessionDe(Bp.p);
+  ok((await webauthn(Bp.p)).get === 1 && (await derniere('/signaler')).par === 'session' && sB && sB.qui === 'marie', '« Envoyer » sans connexion : l’empreinte (une fois, connexion vérifiée par le relais), puis l’envoi avec la session de marie');
+  await Bp.p.waitForTimeout(800);
+  ok(!(await Bp.p.$('.sgn-offre')) && !Bp.erreursPage.length, 'connecté par l’empreinte : rien à proposer, aucune erreur JavaScript');
+  const clesB = await telB.cles();
+  await Bp.ctx.close();
+
+  // c) Des demandes de marie dans tous les états, par le vrai /retour : captures avant / après (de vraies photos de la démo à 412 px).
+  const shot = await surVrai({ width: 412, height: 915 });
+  await shot.p.waitForSelector('.sgn-fab'); await shot.p.evaluate(() => window.Signaler.cacher());
+  const jpeg = async () => 'data:image/jpeg;base64,' + (await shot.p.screenshot({ type: 'jpeg', quality: 70 })).toString('base64');
+  const AVANT = await jpeg();
+  await shot.p.evaluate(() => { const b = document.getElementById('panne'); b.textContent = 'Enregistrer'; b.style.cssText = 'background:#16a34a;color:#fff;border-color:#16a34a'; document.querySelector('h1').textContent = 'Une application de démonstration, corrigée'; });
+  const APRES = await jpeg();
+  await shot.ctx.close();
+  const PR = (n, d = '770lab/home') => 'https://github.com/' + d + '/pull/' + n;
+  const R1 = (await signalerNode('Le total des dossiers est faux sur l’accueil.')).ref;
+  const r1 = await retourDe(R1, { etat: 'a_valider', resume: 'Le total est corrigé ; la PR attend ta validation.', liens: [PR(77)], images: { avant: AVANT, apres: APRES }, apercu: 'https://770lab.github.io/apercu/77/' });
+  const R2 = (await signalerNode('Le bouton Enregistrer ne répond pas.')).ref;
+  const r2 = await retourDe(R2, { etat: 'en_ligne', resume: 'Corrigé et vérifié en ligne.', liens: [PR(76)], images: { avant: AVANT, apres: APRES },
+    annulation: { depot: '770lab/home', commits: ['0a1b2c3d4e5f6a7'], branche: 'main' } });
+  const R3 = (await signalerNode('Le bouton Partager ne fait rien.', 'https://avinou-malkenou.web.app/cartes')).ref;
+  const r3 = await retourDe(R3, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(12, '770lab/avinou-malkenou')], images: { avant: AVANT, apres: APRES } });
+  await ctl('routine', { trig_01UN: 429 });
+  const R4 = (await signalerNode('La recherche est lente le soir.')).ref;
+  await ctl('routine', { trig_01UN: 200 });
+  const essais4 = (await ctl('appels')).slice(-2).map((a) => a.trig + ' ' + a.statut).join(', ');
+  ok(R1 && R2 && R3 && R4 && r1.ok && r2.ok && r3.ok && essais4 === 'trig_01UN 429, trig_02DEUX 200', 'demandes rangées et revenues (à valider, en ligne, Avinou) ; l’abonnement 1 sans crédit (429) : le relais passe aussitôt au 2 (' + essais4 + ')');
+
+  // d) La mise en page de la connexion, de la proposition, des cartes et de la visionneuse : 360, 412, 768, 1280 px, clair et sombre.
+  for (const [w, ht] of [[360, 780], [412, 915], [768, 1024], [1280, 900]]) {
+    for (const theme of ['light', 'dark']) {
+      const nom = w + '-' + theme, q = await surVrai({ width: w, height: ht }, { theme });
+      await authentificateur(q.p);   // l'empreinte de l'appareil, sans clé d'accès encore
+      let pb = [];
+      await ouvrirFenetre(q.p);
+      await q.p.waitForSelector('.sgn-acces [data-a="empreinte"]');
+      await q.p.waitForTimeout(250);
+      pb = pb.concat(await controler(q.p));
+      await capture(q.p, 'empreinte-connexion-' + nom + '.png');
+      await q.p.$eval('.sgn-boite', (b) => { b.scrollTop = b.scrollHeight; });
+      const lig = await q.p.$eval('.sgn-acces [data-a="empreinte"]', (b) => ({ h: b.getBoundingClientRect().height, l: parseFloat(getComputedStyle(b).lineHeight) || 20 }));
+      if (lig.h > 52) pb.push('« Se connecter avec l’empreinte » sur deux lignes (' + Math.round(lig.h) + ' px)');
+      await capture(q.p, 'empreinte-connexion-bas-' + nom + '.png');
+      // La clé de paul (« J’ai une clé ») : un envoi, puis la proposition d'activer l'empreinte.
+      await q.p.click('[data-a="jaicle"]');
+      await q.p.fill('.sgn-cle', CLE_PAUL);
+      await envoyerTexte(q.p, 'Essai de mise en page (' + nom + ')');
+      const vue = !!(await q.p.waitForSelector('.sgn-offre', { timeout: 6000 }).catch(() => null));
+      pb = pb.concat(await controler(q.p));
+      await capture(q.p, 'empreinte-offre-' + nom + '.png');
+      // La session de marie : ses demandes, avec les captures avant / après.
+      await q.p.evaluate((s) => localStorage.setItem('signaler_session_v1', JSON.stringify(s)), sB);
+      await q.p.evaluate(() => window.Signaler.demandes('toutes'));
+      await q.p.waitForSelector('.sgn-carte[data-id="' + R1 + '"]', { timeout: 10000 });
+      await imagesChargees(q.p, '.sgn-carte[data-id="' + R3 + '"]');
+      pb = pb.concat(await controler(q.p));
+      await capture(q.p, 'cartes-' + nom + '.png');
+      await versCarte(q.p, R2);
+      await imagesChargees(q.p, '.sgn-carte[data-id="' + R2 + '"], .sgn-carte[data-id="' + R1 + '"]');
+      pb = pb.concat(await controler(q.p));
+      await capture(q.p, 'cartes-actions-' + nom + '.png');
+      await q.p.click('.sgn-carte[data-id="' + R1 + '"] [data-k="avant"]');
+      await q.p.waitForFunction(() => { const i = document.querySelector('.sgn-vis img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 8000 });
+      pb = pb.concat(await controler(q.p));
+      const vi = await boite(q.p, '.sgn-vis img');
+      await capture(q.p, 'visionneuse-' + nom + '.png');
+      ok(vue && (vi.w > w * 0.6 || vi.h > ht * 0.6) && vi.x >= 0 && vi.x + vi.w <= w && vi.y + vi.h <= ht && !pb.length && !q.erreursPage.length,
+        nom + ' : connexion, proposition, cartes avant / après, visionneuse (' + Math.round(vi.w) + ' × ' + Math.round(vi.h) + ') : rien ne déborde, 3 boutons par rangée au plus, ni italique ni émoji'
+        + (pb.length ? ' — ' + [...new Set(pb)].join(' ; ') : '') + (q.erreursPage.length ? ' — ' + q.erreursPage.join(' ; ') : ''));
+      await q.ctx.close();
+    }
+  }
+
+  // e) « Mes demandes » de bout en bout, au doigt (412 px), avec le même téléphone.
+  const Dp = await surVrai({ width: 412, height: 915 }, { toucher: true });
+  await authentificateur(Dp.p, clesB.map(copie));
+  await Dp.p.waitForSelector('.sgn-fab');
+  await Dp.p.evaluate(() => window.Signaler.demandes('toutes'));
+  await Dp.p.waitForSelector('.sgn-acces [data-a="empreinte"]');
+  ok(/Pour voir tes demandes/.test(await texte(Dp.p, '.sgn-acces')) && !(await Dp.p.$('.sgn-cle')), '« Mes demandes » sans connexion : « Se connecter avec l’empreinte » d’abord');
+  await Dp.p.tap('.sgn-acces [data-a="empreinte"]');
+  await Dp.p.waitForSelector('.sgn-carte[data-id="' + R1 + '"]', { timeout: 15000 });
+  ok((await webauthn(Dp.p)).get === 1 && (await derniere('/demandes')).par === 'session', 'connecté par l’empreinte, la liste s’ouvre (GET /demandes avec la session)');
+  let c1 = await carteVue(Dp.p, R1), c2 = await carteVue(Dp.p, R2), c3 = await carteVue(Dp.p, R3), c4 = await carteVue(Dp.p, R4);
+  const piece = (v) => v.startsWith('Avant ' + VRAI + '/piece/') || v.startsWith('Après ' + VRAI + '/piece/');
+  ok(c1.pil === 'à valider' && c1.meta.endsWith(' · via abonnement 1') && c1.rangs.map((r) => r.join(' | ')).join(' / ') === 'Mettre en ligne | Voir la PR / Ouvrir dans Claude | Voir l’aperçu'
+    && c1.vign.length === 2 && c1.vign.every(piece) && /attend ta validation/.test(c1.notes), 'à valider : « via abonnement 1 », avant / après (servies par le relais), « Mettre en ligne » et « Voir la PR », puis les liens');
+  ok(c2.pil === 'en ligne' && c2.rangs.map((r) => r.join(' | ')).join(' / ') === 'Annuler / Ouvrir dans Claude | Voir la PR' && c2.vign.length === 2, 'en ligne, avec de quoi annuler : « Annuler »');
+  ok(c3.pil === 'à valider' && / · Avinou Malkenou · /.test(c3.meta) && /mis en ligne par son propriétaire, depuis son Mac/.test(c3.notes) && !c3.rangs.flat().includes('Mettre en ligne') && c3.rangs[0].join() === 'Voir la PR',
+    'Avinou Malkenou à valider : pas de « Mettre en ligne », une ligne dit que son propriétaire le met en ligne depuis son Mac');
+  ok(c4.pil === 'en cours' && c4.meta.endsWith(' · via abonnement 2') && !c4.rangs.flat().some((t) => /Renvoyer/.test(t)), 'prise par l’abonnement 2 (le 1 sans crédit), en cours depuis peu : pas de « Renvoyer »');
+  ok((await Dp.p.$$eval('.sgn-filtre', (l) => l.map((x) => x.textContent.replace(/\s+/g, ' ').trim()))).join(' | ').includes('À traiter 2') && (await Dp.p.textContent('.sgn-badge')) === '2',
+    '« À traiter » compte les deux modifications à valider (le nombre du rond aussi)');
+  // « Mettre en ligne » avec une empreinte fraîche (posée à l'instant) : pas redemandée.
+  let n0 = (await ctl('appels')).length;
+  await Dp.p.tap('.sgn-carte[data-id="' + R1 + '"] [data-a="valider"]');
+  await etatDit(Dp.p, /^Mise en ligne lancée/);
+  let av = (await ctl('appels')).slice(n0);
+  ok((await webauthn(Dp.p)).get === 1 && av.length === 1 && av[0].text.startsWith(Coeur.MARQUE_VALIDER) && av[0].text.includes(PR(77)) && av[0].text.includes('Validé avec son empreinte par : marie'),
+    '« Mettre en ligne » (empreinte de moins de 5 min) : pas d’empreinte de plus ; la routine reçoit le travail VALIDER avec la PR');
+  c1 = await carteVue(Dp.p, R1);
+  ok(c1.pil === 'mise en ligne en cours' && !c1.rangs.flat().includes('Mettre en ligne'), 'la carte passe à « mise en ligne en cours »');
+  await versCarte(Dp.p, R1);
+  await capture(Dp.p, 'mise-en-ligne-lancee-412-light.png');
+  ok((await retourDe(R1, { etat: 'en_ligne', resume: 'Fusionnée et vérifiée sur la vraie adresse.', images: { apres: APRES }, annulation: { depot: '770lab/home', commits: ['89abcdef0123'] } })).ok, 'la routine renvoie « en ligne », avec de quoi annuler');
+  // « Annuler » : un toucher court ne fait rien ; garder appuyé 1,2 s lance l'annulation.
+  await versCarte(Dp.p, R2);
+  const selA = '.sgn-carte[data-id="' + R2 + '"] [data-a="annuler"]';
+  n0 = (await ctl('appels')).length;
+  await Dp.p.tap(selA);
+  await Dp.p.waitForTimeout(300);
+  ok(/^Pas annulé : garde le doigt/.test(await texte(Dp.p, '.sgn-etat')) && (await ctl('appels')).length === n0 && (await carteVue(Dp.p, R2)).pil === 'en ligne', '« Annuler » touché brièvement : rien ne part, on dit de garder appuyé');
+  const bA = await boite(Dp.p, selA);
+  await doigt(Dp.p, 'touchStart', bA.cx, bA.cy);
+  await attendre(600);
+  const mi = await Dp.p.$eval(selA, (b) => ({ tient: b.classList.contains('sgn-tient'), t: getComputedStyle(b, '::before').transform }));
+  await capture(Dp.p, 'annuler-appui-412-light.png');
+  await attendre(800);
+  await doigt(Dp.p, 'touchEnd');
+  await etatDit(Dp.p, /^Annulation lancée/);
+  av = (await ctl('appels')).slice(n0);
+  ok(mi.tient && av.length === 1 && av[0].text.startsWith(Coeur.MARQUE_ANNULER) && av[0].text.includes('0a1b2c3d4e5f6a7'), '« Annuler » gardé appuyé 1,4 s (il se remplit) : la routine reçoit le travail ANNULER avec le commit à défaire');
+  ok((await carteVue(Dp.p, R2)).pil === 'annulation en cours', 'la carte passe à « annulation en cours »');
+  ok((await retourDe(R2, { etat: 'annulee', resume: 'Le changement est retiré ; le site est revenu comme avant.' })).ok, 'la routine renvoie « annulee »');
+  await actualiser(Dp.p, true);
+  ok((await carteVue(Dp.p, R2)).pil === 'annulée' && !(await Dp.p.$(selA)), 'après « Actualiser » : « annulée », plus de bouton Annuler');
+  // La visionneuse : avant / après en plein écran, Échap ou « Fermer ».
+  await versCarte(Dp.p, R1);
+  await Dp.p.tap('.sgn-carte[data-id="' + R1 + '"] [data-k="avant"]');
+  await Dp.p.waitForFunction(() => { const i = document.querySelector('.sgn-vis img'); return i && i.complete && i.naturalWidth > 0; }, null, { timeout: 8000 });
+  const v1 = await Dp.p.evaluate(() => ({ b: [...document.querySelectorAll('.sgn-vis button')].map((x) => x.textContent + (x.getAttribute('aria-pressed') === 'true' ? '*' : '')).join(' | '),
+    l: document.querySelector('.sgn-vis-l').textContent, f: document.activeElement && document.activeElement.textContent }));
+  await Dp.p.tap('.sgn-vis [data-v="apres"]');
+  const v2 = await Dp.p.evaluate(() => ({ l: document.querySelector('.sgn-vis-l').textContent, src: document.querySelector('.sgn-vis img').getAttribute('src') }));
+  ok(v1.b === 'Avant* | Après | Fermer' && v1.l === 'Avant le changement' && v1.f === 'Fermer' && v2.l === 'Après le changement (en ligne)' && v2.src.startsWith(VRAI + '/piece/'),
+    'toucher « Avant » : la capture en plein écran (Avant / Après / Fermer), « Après » montre l’autre');
+  await capture(Dp.p, 'visionneuse-apres-412-light.png');
+  await Dp.p.keyboard.press('Escape');
+  ok(!(await Dp.p.$('.sgn-vis')) && !!(await Dp.p.$('.sgn-boite')), 'Échap ferme la capture en plein écran, pas la fenêtre');
+  await Dp.p.tap('.sgn-carte[data-id="' + R1 + '"] [data-k="apres"]');
+  await Dp.p.waitForSelector('.sgn-vis');
+  await Dp.p.tap('.sgn-vis [data-v="fermer"]');
+  ok(!(await Dp.p.$('.sgn-vis')) && (await Dp.p.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-k'))) === 'apres', '« Fermer » aussi ; le focus revient sur la vignette');
+  // L'empreinte trop vieille (6 minutes, la page et le relais d'accord) : « Mettre en ligne » la redemande D'ABORD.
+  const R5 = (await signalerNode('Le menu se ferme tout seul.')).ref;
+  await retourDe(R5, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(78)], images: { avant: AVANT, apres: APRES } });
+  await ctl('decalage', { ms: 6 * 60000 });
+  await Dp.p.evaluate((ms) => { const n = Date.now.bind(Date); Date.now = () => n() + ms; }, 6 * 60000);
+  const jA = (await requetes()).length;
+  await actualiser(Dp.p, true);
+  // La liste redessinée (session de plus de 5 min, une carte « Mettre en ligne ») précharge un défi : on attend qu'il soit arrivé.
+  for (let i = 0; i < 50 && !(await requetes()).slice(jA).some((x) => x.m === 'POST' && x.p === '/auth/options/connexion'); i++) await attendre(100);
+  await attendre(200);
+  let j0 = (await requetes()).length, g0 = (await webauthn(Dp.p)).get;
+  n0 = (await ctl('appels')).length;
+  await versCarte(Dp.p, R5);
+  await Dp.p.tap('.sgn-carte[data-id="' + R5 + '"] [data-a="valider"]');
+  await etatDit(Dp.p, /^Mise en ligne lancée/);
+  let suite = (await requetes()).slice(j0).filter((x) => x.m === 'POST').map((x) => x.p.replace(R5, '<réf>'));
+  av = (await ctl('appels')).slice(n0);
+  ok((await webauthn(Dp.p)).get === g0 + 1 && suite.join(', ') === '/auth/connexion, /demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(78)),
+    'empreinte de plus de 5 minutes : « Mettre en ligne » redemande l’empreinte d’abord (défi préchargé), puis met en ligne (' + suite.join(', ') + ')');
+  // Le relais seul la juge trop vieille (sa montre avance, pas celle de la page) : 403 « empreinte », l'empreinte, puis de nouveau.
+  const R6 = (await signalerNode('Le bouton Imprimer est caché.')).ref;
+  await retourDe(R6, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(79)] });
+  await ctl('decalage', { ms: 12 * 60000 });
+  await actualiser(Dp.p, true);
+  j0 = (await requetes()).length; g0 = (await webauthn(Dp.p)).get; n0 = (await ctl('appels')).length;
+  await versCarte(Dp.p, R6);
+  await Dp.p.tap('.sgn-carte[data-id="' + R6 + '"] [data-a="valider"]');
+  await etatDit(Dp.p, /^Mise en ligne lancée/);
+  suite = (await requetes()).slice(j0).filter((x) => x.m === 'POST').map((x) => x.p.replace(R6, '<réf>'));
+  av = (await ctl('appels')).slice(n0);
+  ok((await webauthn(Dp.p)).get === g0 + 1 && suite.join(', ') === '/demandes/<réf>/valider, /auth/options/connexion, /auth/connexion, /demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(79)),
+    'le relais refuse une empreinte trop vieille (403) : la page la redemande, puis met en ligne (' + suite.join(', ') + ')');
+  // Sans nouvelle depuis 15 minutes : « Renvoyer » et « Renvoyer sur l’autre abonnement ».
+  await ctl('decalage', { ms: 17 * 60000 });
+  await actualiser(Dp.p, true);
+  await Dp.p.waitForFunction((id) => !!document.querySelector('.sgn-carte[data-id="' + id + '"] [data-ab]'), R4, { timeout: 8000 }).catch(() => {});
+  c4 = await carteVue(Dp.p, R4);
+  ok(c4.rangs[0].join(' | ') === 'Renvoyer | Renvoyer sur l’autre abonnement' && /Pas de nouvelle de Claude depuis plus de 15 minutes/.test(c4.notes) && (await derniere('/routine')).par === 'session',
+    'en cours, sans nouvelle depuis 15 minutes : « Renvoyer » et « Renvoyer sur l’autre abonnement » (les abonnements lus par GET /routine)');
+  await versCarte(Dp.p, R4);
+  await capture(Dp.p, 'autre-abonnement-412-light.png');
+  pb11 = await controler(Dp.p);
+  n0 = (await ctl('appels')).length;
+  await Dp.p.tap('.sgn-carte[data-id="' + R4 + '"] [data-ab="1"]');
+  await etatDit(Dp.p, /^Renvoyée à Claude \(abonnement 1\)\.$/);
+  av = (await ctl('appels')).slice(n0);
+  c4 = await carteVue(Dp.p, R4);
+  ok(av.length === 1 && av[0].trig === 'trig_01UN' && av[0].text.includes('La recherche est lente le soir.') && c4.meta.endsWith(' · via abonnement 1') && !c4.rangs.flat().some((t) => /Renvoyer/.test(t)),
+    '« Renvoyer sur l’autre abonnement » : la routine du 1 (choisie, même notée sans crédit), la carte dit « via abonnement 1 »');
+  ok(!pb11.length, 'mise en page des cartes à 412 px' + (pb11.length ? ' — ' + pb11.join(' ; ') : ''));
+  const boiteNoire = JSON.stringify(await Dp.p.evaluate(() => window.Signaler._journal()));
+  ok(!boiteNoire.includes((await sessionDe(Dp.p)).session.split('.')[1]) && !/auth\/|Bearer/.test(boiteNoire), 'la boîte noire ne garde rien des appels du bouton (ni /auth, ni la session)');
+  // La session expire (12 h passées à la montre du relais) : 401, la page l'oublie et redemande l'empreinte.
+  await ctl('decalage', { ms: 13 * 3600000 });
+  await actualiser(Dp.p, true);
+  await Dp.p.waitForSelector('.sgn-erreur', { timeout: 8000 }).catch(() => {});
+  ok(/^Ta connexion a expiré/.test(await texte(Dp.p, '.sgn-erreur')) && !(await sessionDe(Dp.p)) && !!(await Dp.p.$('.sgn-acces [data-a="empreinte"]')),
+    'session expirée au relais (401) : la page l’oublie, le dit, et propose l’empreinte');
+  await capture(Dp.p, 'session-expiree-412-light.png');
+  await Dp.p.tap('.sgn-acces [data-a="empreinte"]');
+  await Dp.p.waitForSelector('.sgn-carte', { timeout: 15000 });
+  ok(!!(await sessionDe(Dp.p)) && (await derniere('/demandes')).par === 'session', 'l’empreinte de nouveau : une session neuve, la liste revient');
+  // Un appareil retiré (depuis le pupitre) : ses sessions ne valent plus rien, tout de suite ; l'empreinte est refusée.
+  const mes = await enNode('/auth/appareils');
+  const retire = mes.ok && mes.appareils.length === 1 ? await enNode('/auth/appareils/' + mes.appareils[0].id + '/retirer', { corps: {} }) : {};
+  await actualiser(Dp.p, true);
+  await Dp.p.waitForSelector('.sgn-erreur', { timeout: 8000 }).catch(() => {});
+  ok(retire.ok && /^Ta connexion a expiré \(ou cet appareil a été retiré\)/.test(await texte(Dp.p, '.sgn-erreur')) && !(await sessionDe(Dp.p)), 'appareil retiré : la session est refusée aussitôt, la page l’oublie');
+  await Dp.p.tap('.sgn-acces [data-a="empreinte"]');
+  await etatDit(Dp.p, /^Empreinte refusée par le relais : appareil inconnu ou retiré/);
+  ok(!(await sessionDe(Dp.p)) && !!(await Dp.p.$('.sgn-acces [data-a="empreinte"]')), 'et l’empreinte de cet appareil est refusée, on le dit');
+  ok(!Dp.erreursPage.length, 'aucune erreur JavaScript' + (Dp.erreursPage.length ? ' — ' + Dp.erreursPage.join(' ; ') : ''));
+  await ctl('decalage', { ms: 0 });
+  await Dp.ctx.close();
+
+  // f) Un ordinateur qui a la clé, son empreinte, mais pas de clé d'accès pour ce site : « Mettre en ligne » propose de l'activer.
+  const R7 = (await signalerNode('La date est en anglais.')).ref;
+  await retourDe(R7, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(80)], images: { avant: AVANT, apres: APRES } });
+  const E = await surVrai({ width: 768, height: 1024 }, { cle: CLE, theme: 'dark' });
+  await authentificateur(E.p);
+  await E.p.waitForSelector('.sgn-fab');
+  await E.p.evaluate(() => window.Signaler.demandes('toutes'));
+  await E.p.waitForSelector('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]', { timeout: 10000 });
+  await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
+  await etatDit(E.p, /pas encore activée sur cet appareil/);
+  ok(!!(await E.p.waitForSelector('.sgn-offre', { timeout: 3000 }).catch(() => null)) && (await webauthn(E.p)).get === 1, 'pas de clé d’accès pour ce site : on le dit, et « Activer l’empreinte sur cet appareil ? » est proposé dans la liste');
+  pb11 = await controler(E.p);
+  await capture(E.p, 'sans-empreinte-768-dark.png');
+  await E.p.click('[data-a="activer"]');
+  await etatDit(E.p, /^Empreinte activée sur cet appareil/);
+  n0 = (await ctl('appels')).length;
+  await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
+  await etatDit(E.p, /^Mise en ligne lancée/);
+  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).length === 1, 'activée (une session fraîche) : « Mettre en ligne » part sans redemander l’empreinte');
+  // « Annuler » à la souris : garder le bouton appuyé.
+  ok((await retourDe(R7, { etat: 'en_ligne', resume: 'En ligne.', annulation: { depot: '770lab/home', commits: ['fedcba987654'] } })).ok, 'retour « en ligne »');
+  await actualiser(E.p, false);
+  const bE = await boite(E.p, '.sgn-carte[data-id="' + R7 + '"] [data-a="annuler"]');
+  n0 = (await ctl('appels')).length;
+  await E.p.mouse.move(bE.cx, bE.cy); await E.p.mouse.down(); await attendre(1400); await E.p.mouse.up();
+  await etatDit(E.p, /^Annulation lancée/);
+  ok((await ctl('appels')).slice(n0).some((a) => a.text.startsWith(Coeur.MARQUE_ANNULER) && a.text.includes('fedcba987654')), '« Annuler » gardé appuyé à la souris : le travail ANNULER part');
+  ok(!pb11.length && !E.erreursPage.length, '768 px sombre : mise en page' + (pb11.length ? ' — ' + pb11.join(' ; ') : '') + (E.erreursPage.length ? ' — ' + E.erreursPage.join(' ; ') : ''));
+  // g) « Annuler » à la souris (Chrome sur Mac, trackpad) à 360 px après un clic trop court, puis à 1280 px sur une liste qu'on
+  // vient d'ouvrir : pendant l'appui, rien ne bouge au-dessus du bouton et il garde le pointeur (sinon Chrome voyait la souris
+  // « sortir » du bouton immobile et l'appui tombait).
+  for (const [w, hh, court] of [[360, 740, true], [1280, 800, false]]) {
+    const R = (await signalerNode('Le titre est coupé (' + w + ' px).')).ref, sha = 'abcabc' + w + '0';
+    ok((await retourDe(R, { etat: 'en_ligne', resume: 'En ligne.', images: { avant: AVANT, apres: APRES }, annulation: { depot: '770lab/home', commits: [sha] } })).ok, w + ' px : retour « en ligne »');
+    await E.p.keyboard.press('Escape');
+    await E.p.setViewportSize({ width: w, height: hh });
+    await E.p.evaluate(() => window.Signaler.demandes('toutes'));
+    const sel = '.sgn-carte[data-id="' + R + '"] [data-a="annuler"]';
+    await E.p.waitForSelector(sel, { timeout: 10000 });
+    // La liste en haut (comme à l'ouverture) : sans défilement, Chrome ne recale rien, un message qui change de hauteur décale le bouton.
+    await E.p.$eval('.sgn-boite', (b) => { b.scrollTop = 0; });
+    ok((await boite(E.p, sel)).y + 40 < hh, w + ' px : la nouvelle demande est en tête, son « Annuler » se voit sans défiler');
+    n0 = (await ctl('appels')).length;
+    if (court) {
+      const b0 = await boite(E.p, sel);
+      await E.p.mouse.click(b0.cx, b0.cy);
+      await etatDit(E.p, /^Pas annulé : garde le doigt/);
+      ok((await ctl('appels')).length === n0, w + ' px : clic trop court à la souris : rien ne part');
+    }
+    const b1 = await boite(E.p, sel);
+    await E.p.mouse.move(b1.cx, b1.cy); await E.p.mouse.down();
+    await attendre(500);
+    const b2 = await boite(E.p, sel), tient = await E.p.$eval(sel, (b) => b.classList.contains('sgn-tient'));
+    await capture(E.p, 'souris-annuler-' + w + '-dark.png');
+    await attendre(900); await E.p.mouse.up();
+    await etatDit(E.p, /^Annulation lancée/);
+    ok(tient && Math.abs(b2.y - b1.y) < 1 && (await ctl('appels')).slice(n0).some((a) => a.text.startsWith(Coeur.MARQUE_ANNULER) && a.text.includes(sha)),
+      w + ' px : « Annuler » gardé appuyé à la souris' + (court ? ' après un clic trop court' : ' sur une liste qu’on vient d’ouvrir') + ' : le bouton ne bouge pas, le travail ANNULER part'
+      + (tient && Math.abs(b2.y - b1.y) < 1 ? '' : ' (tient ' + tient + ', décalage ' + (b2.y - b1.y) + ' px)'));
+  }
+  await E.ctx.close();
+  // h) Une page dont la CSP refuse les images du relais (img-src 'self' data: blob:, le pupitre avant sa correction) : la vignette le
+  // dit au lieu d'un cadre vide, et la toucher ouvre la capture dans un nouvel onglet (adresse du relais).
+  {
+    const G = await surVrai({ width: 412, height: 915 }, { cle: CLE, csp: true });
+    const LOGG = []; G.p.on('console', (m) => LOGG.push(m.type() + ': ' + m.text())); G.p.on('requestfailed', (r) => LOGG.push('échec ' + r.method() + ' ' + r.url() + ' ' + (r.failure() || {}).errorText));
+    await G.p.waitForSelector('.sgn-fab');
+    await G.p.evaluate(() => window.Signaler.demandes('toutes'));
+    await G.p.waitForSelector('.sgn-carte .sgn-ap', { timeout: 10000 }).catch(async (e) => {
+      await capture(G.p, 'images-refusees-ko.png');
+      console.log('  (liste : ' + (await G.p.evaluate(() => (document.querySelector('.sgn-boite') || document.body).innerText.replace(/\s+/g, ' ').slice(0, 600))) + ')\n' + LOGG.join('\n'));
+      throw e;
+    });
+    const ko = await G.p.waitForFunction(() => document.querySelectorAll('.sgn-ap.sgn-ap-ko').length >= 2, null, { timeout: 8000 }).then(() => true, () => false);
+    const selV = '.sgn-ap.sgn-ap-ko[data-k="avant"]';
+    await G.p.$eval(selV, (b) => b.scrollIntoView({ block: 'center' }));
+    await capture(G.p, 'images-refusees-412-light.png');
+    const [onglet] = await Promise.all([G.ctx.waitForEvent('page', { timeout: 8000 }), G.p.click(selV)]);
+    ok(ko && /\/piece\/[0-9a-f]{32}$/.test(onglet.url()) && onglet.url().startsWith(VRAI) && !(await G.p.$('.sgn-vis')),
+      'page qui refuse les images du relais : la vignette dit « Image bloquée par cette page », la toucher ouvre la capture dans un onglet');
+    const pbG = await controler(G.p);
+    ok(!pbG.length && !G.erreursPage.length, '412 px, images refusées : mise en page' + (pbG.length ? ' — ' + pbG.join(' ; ') : '') + (G.erreursPage.length ? ' — ' + G.erreursPage.join(' ; ') : ''));
+    await G.ctx.close();
+  }
+  }
   console.log('  captures : ' + CAPTURES);
 } catch (e) { ko++; console.log('  ✗ exception : ' + (e && e.stack || e)); }
-finally { await navigateur.close(); site.close(); relais.close(); }
+finally { await navigateur.close(); site.close(); relais.close(); await fil.terminate(); }
 
 console.log(ko ? '\n✗ ' + ko + ' échec(s)' : '\n✓ tout passe');
 process.exit(ko ? 1 : 0);

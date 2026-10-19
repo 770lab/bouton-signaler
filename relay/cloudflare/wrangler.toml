@@ -3,6 +3,9 @@
 #   npx wrangler@4 secret put ROUTINE_URL      # https://api.anthropic.com/v1/claude_code/routines/trig_…/fire
 #   npx wrangler@4 secret put ROUTINE_JETON    # le jeton de la routine (sk-ant-oat01-…)
 #   npx wrangler@4 secret put CLES             # marie:<clé>,paul:<clé>
+#   openssl rand -base64 48 | npx wrangler@4 secret put SESSION_SECRET   # connexion par empreinte (32 caractères au moins)
+#   npx wrangler@4 secret put ROUTINE_URL_2    # facultatif : la routine du second abonnement Claude (pris quand le premier refuse)
+#   npx wrangler@4 secret put ROUTINE_JETON_2  # facultatif : son jeton
 name = "bouton-signaler"
 main = "worker.mjs"
 compatibility_date = "2025-09-01"

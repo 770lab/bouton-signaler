@@ -10,11 +10,14 @@
     main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
     .carte { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin: 16px 0; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    button.panne, button.lien { padding: 10px 14px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; color: inherit; font: inherit; cursor: pointer; }
+    button.panne, button.lien, a.lien { padding: 10px 14px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; color: inherit; font: inherit; cursor: pointer; text-decoration: none; display: inline-block; }
+    label.champ { display: block; margin: 0 0 10px; font-size: 15px; }
+    label.champ input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 10px; font: inherit; background: #fff; color: inherit; }
+    .espace { height: 70vh; }
     @media (prefers-color-scheme: dark) {
       body { background: #0b1220; color: #e2e8f0; }
       .carte { background: #111a2e; border-color: #1e293b; }
-      button.panne, button.lien { background: #111a2e; border-color: #334155; }
+      button.panne, button.lien, a.lien, label.champ input { background: #111a2e; border-color: #334155; }
     }
   </style>
 </head>
@@ -26,16 +29,36 @@
       <button class="panne" id="panne">Enregistrer (ce bouton plante)</button>
     </div>
     <p>Touchez le rond orange de Claude en bas à droite : il photographie cet écran, vous laisse écrire ou dicter, et envoie le tout au relais.</p>
-    <p>Le petit nombre rouge sur le rond compte vos demandes à traiter (une question de Claude, une PR à relire, une demande pas partie) : touchez-le pour les voir.</p>
+    <p>Le petit nombre rouge sur le rond compte vos demandes à traiter (une question de Claude, une PR à relire, une modification à valider, une demande pas partie) : touchez-le pour les voir.</p>
+    <p>Dans « Mes demandes », chaque modification montre ses captures avant / après (touchez-en une pour la voir en grand). « Annuler », gardé appuyé une seconde, retire du site une modification en ligne ; « Mettre en ligne » publie une modification à valider, après votre empreinte.</p>
+    <p>La connexion : la première fois, votre clé d’équipe ; le bouton propose ensuite d’activer l’empreinte sur cet appareil, et le doigt (ou le visage) suffit.</p>
     <p>Chaque projet a son propre interrupteur sur le pupitre : coupé, le rond ne paraît plus sur ses pages (l’interrupteur général coupe tout).</p>
     <p class="actions"><button class="lien" id="mes-demandes">Voir mes demandes</button> <button class="lien" id="demandes-projet">Celles de Home</button></p>
+    <div class="carte" id="boite-noire">
+      <h2>La boîte noire</h2>
+      <p>Le bouton garde en mémoire les 30 dernières secondes de la page (touchers, pages, erreurs, requêtes en échec) et les joint au signalement. D’un champ, il ne garde que lequel : jamais ce qui y est tapé.</p>
+      <label class="champ">Nom du client <input id="champ-nom" type="text" autocomplete="off"></label>
+      <label class="champ">Mot de passe <input id="champ-mdp" type="password" autocomplete="new-password"></label>
+      <p>Une erreur ou une requête qui échoue allume un point rouge sur le rond, avec une bulle « Le signaler ? ».</p>
+      <p class="actions"><button class="panne" id="lancer-erreur">Provoquer une erreur</button> <button class="panne" id="requete-ko">Requête qui échoue</button></p>
+      <p class="actions"><a class="lien" id="vers-bas" href="#bas">Aller en bas de la page</a></p>
+    </div>
+    <div class="espace"></div>
+    <div class="carte" id="bas">
+      <p>Le bas de la page. Le rond se déplace : appui long dessus, puis glisser ; il garde sa place sur cette page.</p>
+      <p class="actions"><a class="lien" href="#">Revenir en haut</a></p>
+    </div>
   </main>
   <script>
     document.getElementById('panne').addEventListener('click', function () { console.error('TypeError: devis.client is undefined'); });
+    // Une vraie erreur (non rattrapée) et une requête en échec : le point rouge et la bulle du bouton.
+    document.getElementById('lancer-erreur').addEventListener('click', function () { throw new Error('Le calcul du total a planté (démo)'); });
+    document.getElementById('requete-ko').addEventListener('click', function () { fetch('/api/panne?jeton=demo-secret').catch(function () {}); });
     document.getElementById('mes-demandes').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes('toutes'); });
     document.getElementById('demandes-projet').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes({ projet: 'home' }); });
     // Démo : adresse du relais passée dans l'URL (?relais=http://localhost:8787), sinon le relais local de développement ;
     // ?projet=home (ou pupitre, havroutia, avinou) : le projet de la page, sinon d'après son adresse (ici, aucun).
+    // L'empreinte (WebAuthn) ne marche qu'en https ou sur http://localhost : ouvrir la démo par localhost, pas par 127.0.0.1.
     var q = new URLSearchParams(location.search);
     window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
   </script>

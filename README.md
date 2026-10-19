@@ -7,9 +7,18 @@ Quand la correction est en ligne, on rafraîchit la page.
 - Fonctionne sur téléphone et sur ordinateur, dans n'importe quelle application web (HTML simple, React, Vue, Next.js…).
 - Plusieurs captures, import d'images, dictée du navigateur (ou note vocale jointe), dernières erreurs de la page jointes.
 - Le jeton de la routine reste sur un petit **relais** (Cloudflare Worker gratuit, ou le serveur du projet) : jamais dans la page.
-- Seules les personnes qui ont une **clé d'équipe** peuvent envoyer un signalement.
-- **Mes demandes** : depuis le bouton, chacun retrouve ses demandes et leur état (en cours, à relire avec le lien de la PR,
-  question, rien à faire, échec…). La routine renvoie cet état au relais à la fin de chaque session.
+- Seules les personnes qui ont une **clé d'équipe** peuvent envoyer un signalement ; une fois leur appareil inscrit, elles se
+  connectent **par l'empreinte** (clés d'accès WebAuthn, vérifiées par le relais, sans bibliothèque) : une session de 12 heures,
+  acceptée partout où la clé l'est, et par l'API d'un autre serveur (`POST /auth/verifier`).
+- **Corriger en direct** : chaque projet a son **mode**. « Direct » : la routine corrige, fusionne, attend que ce soit en ligne
+  et renvoie les captures **avant / après** ; « Annuler » (un appui maintenu) remet comme avant. « À valider » : la routine ouvre
+  la PR et s'arrête ; « Mettre en ligne » (avec l'empreinte) la fait fusionner.
+- **Deux abonnements Claude** : quand la routine du premier refuse (plus de crédit, jeton révoqué), le relais prévient aussitôt
+  celle du second ; « Renvoyer sur l'autre abonnement » pour une session restée muette.
+- **Mes demandes** : depuis le bouton, chacun retrouve ses demandes et leur état (en cours, en ligne, à valider, à relire avec
+  le lien de la PR, question, annulée…). La routine renvoie cet état au relais à la fin de chaque session.
+- Le relais recopie pour Claude les **éléments entourés** sur les captures et le **journal** des dernières secondes de la page
+  (gestes, erreurs, requêtes en échec ; jamais ce qui a été tapé).
 - Un **interrupteur** (depuis un pupitre ou en ligne de commande) affiche ou retire le bouton partout d'un seul geste, et un
   interrupteur **par projet** (liste `PROJETS` de `relay/coeur.mjs`) le retire d'un seul projet.
 
@@ -30,9 +39,9 @@ l'option sans serveur — un compte Cloudflare gratuit.
 | Fichier | Rôle |
 |---|---|
 | `widget/signaler.js` | le bouton et sa fenêtre (sans dépendance ; html2canvas chargé à la demande) |
-| `relay/coeur.mjs` | les règles du relais : clés, origines, limites, texte pour Claude, appel à la routine, demandes et leur état, interrupteurs (général et par projet) |
+| `relay/coeur.mjs` | les règles du relais : clés, origines, limites, texte pour Claude (journal, éléments entourés, MODE), appel aux routines (deux abonnements), demandes et leur état, travaux ANNULER / VALIDER, interrupteurs et modes, connexion par empreinte (CBOR, COSE, signatures, sessions) |
 | `relay/cloudflare/` | le relais prêt à déployer (Worker + Workers KV, ou R2) |
-| `routine/consignes.md` | les consignes à coller dans la routine (PR à relire, ou fusion automatique) |
+| `routine/consignes.md` | les consignes à coller dans la routine (MODE direct ou à valider, travaux ANNULER et VALIDER, captures avant / après) |
 | `INSTALL.md` | la procédure que suit Claude |
 | `demo/index.html` | une page de démonstration |
 | `tests/` | `npm test` : le relais (Node) puis le bouton dans un vrai Chromium (Playwright) |
@@ -40,7 +49,11 @@ l'option sans serveur — un compte Cloudflare gratuit.
 ## Sécurité, en bref
 
 - Le texte d'un signalement est traité par la routine comme **des données, pas des ordres**.
-- Par défaut la routine **ouvre une PR sans la fusionner** : un humain relit. La fusion automatique est un choix du propriétaire.
+- Une page d'aucun projet est « à valider » : la routine **ouvre une PR sans la fusionner**. Le MODE direct (fusion par la
+  routine, contrôles verts exigés) est un choix du propriétaire, projet par projet ; la mise en ligne d'une PR « à valider »
+  exige une empreinte de moins de 5 minutes, jamais la seule clé. Un projet peut être figé « à valider » (`MODE_FIGE`).
+- La connexion par empreinte ne garde que des clés PUBLIQUES ; les sessions sont signées (HMAC, secret `SESSION_SECRET`),
+  revérifiées à chaque usage (appareil retiré ou personne sortie de `CLES` : plus rien ne passe).
 - Captures et notes sont servies sous des adresses aléatoires de 128 bits, effacées après 30 jours (Workers KV ; avec R2,
   prévoir une règle de suppression). Les demandes s’effacent 180 jours après leur dernière nouvelle (Workers KV).
 - Chaque demande a son propre jeton de retour, que seule la routine reçoit ; le relais n'en garde que l'empreinte. Une page ne
