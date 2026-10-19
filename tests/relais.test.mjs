@@ -959,7 +959,8 @@ async function inscrire(env, A, o) {
   const opt = await rep.json();
   if (rep.status !== 200) return { opt: opt, rep: rep, j: opt };
   const cred = await A.creer(opt, origine, o.alterer);
-  const r2 = await appel(env, null, 'POST', '/auth/inscription', { origine: o.origineInscription || origine, cle: null, corps: cred });
+  const corps = o.nomInscription === undefined ? cred : Object.assign({}, cred, { nom: o.nomInscription });
+  const r2 = await appel(env, null, 'POST', '/auth/inscription', { origine: o.origineInscription || origine, cle: null, corps: corps });
   return { opt: opt, rep: r2, j: await r2.json(), cred: cred };
 }
 // Se connecter : options (sans clé), puis la signature de l'appareil. o : { origine, alterer, methode }.
@@ -1193,6 +1194,25 @@ test('POST /auth/verifier (pour l’API du Mac) : valide, expirée, falsifiée, 
   assert.equal(rep.headers.get('Access-Control-Allow-Origin'), null);
   const pre = await routeur(new Request(BASE + '/auth/verifier', { method: 'OPTIONS', headers: { Origin: ORIGINE_770 } }), env);
   assert.match(pre.headers.get('Access-Control-Allow-Headers'), /Authorization/);
+});
+
+test('le nom de l’appareil : corrigé à l’inscription (clé créée sur le téléphone ou une clé USB), sinon celui des options', async () => {
+  assert.equal(C.nomInscrit('Téléphone ou clé (inscrit depuis Mac · Chrome)', 'Mac · Chrome'), 'Téléphone ou clé (inscrit depuis Mac · Chrome)');
+  assert.equal(C.nomInscrit('  iMac \n du\tbureau  ', 'x'), 'iMac du bureau');
+  assert.equal(C.nomInscrit('a'.repeat(80), 'x'), 'a'.repeat(60));
+  assert.equal(C.nomInscrit('Mac\u0001\u0007 · Chrome', 'x'), 'Mac · Chrome');
+  for (const x of [undefined, null, '', '   ', '\u0001\u0002', 42, {}, ['Mac']]) assert.equal(C.nomInscrit(x, 'Mac · Chrome'), 'Mac · Chrome', JSON.stringify(x));
+  assert.equal(C.nomInscrit(undefined, ''), 'Appareil');
+  for (const [nomInscription, attendu] of [[undefined, 'iMac du bureau'], ['Téléphone ou clé (inscrit depuis iMac du bureau)', 'Téléphone ou clé (inscrit depuis iMac du bureau)'],
+    ['   ', 'iMac du bureau'], [{ pirate: 1 }, 'iMac du bureau']]) {
+    const env = envAuth(), A = await appareil(-7);
+    const ins = await inscrire(env, A, { nom: 'iMac du bureau', nomInscription: nomInscription });
+    assert.equal(ins.rep.status, 200, JSON.stringify(ins.j));
+    assert.equal(ins.j.appareil.nom, attendu, JSON.stringify(nomInscription));
+    assert.equal(appareilRange(env, A.id).nom, attendu);
+    const liste = await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(ins.j.session) })).json();
+    assert.deepEqual(liste.appareils.map((a) => a.nom), [attendu]);
+  }
 });
 
 test('les appareils : 20 au plus par personne, liste triée, stockage qui ne sait pas effacer (pierre tombale)', async () => {

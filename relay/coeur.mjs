@@ -1100,6 +1100,10 @@ export const appareilValide = (ap, id) => !!(ap && typeof ap === 'object' && !ap
 export const appareilPublic = (ap, actuel) => ({ id: ap.id, nom: ap.nom, rpId: ap.rpId, creeLe: ap.creeLe, vuLe: ap.vuLe || null, actuel: !!actuel && ap.id === actuel });
 // Le nom donné à un appareil à son inscription (« iPhone de Marie »), 60 caractères au plus.
 export const nomAppareil = (x) => propre(typeof x === 'string' ? x.replace(/\s+/g, ' ') : '', 60) || 'Appareil';
+// Le nom rangé à l'inscription : celui envoyé avec la clé d'accès créée (POST /auth/inscription { …, nom }), s'il y en a un, sinon
+// celui des options (le défi). La page ne sait qu'APRÈS la création si la clé vit sur un autre appareil (le téléphone par QR code,
+// une clé USB : authenticatorAttachment « cross-platform ») : elle corrige alors le nom. Mêmes caractères que nomAppareil.
+export const nomInscrit = (x, nomDefi) => (typeof x === 'string' && propre(x.replace(/\s+/g, ' '), 60) ? nomAppareil(x) : nomAppareil(nomDefi));
 // La liste des appareils d'une personne avec un de plus, en tête (sans doublon, LIMITES.appareils au plus) ; ou sans lui.
 export const appareilsAvec = (ids, id) => [id].concat((Array.isArray(ids) ? ids : []).filter((x) => x !== id && ID_APPAREIL_RX.test(String(x)))).slice(0, LIMITES.appareils);
 export const appareilsSans = (ids, id) => (Array.isArray(ids) ? ids : []).filter((x) => x !== id && ID_APPAREIL_RX.test(String(x)));

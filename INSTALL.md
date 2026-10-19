@@ -228,8 +228,9 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   nouvelle depuis 15 minutes (« Renvoyer sur l'autre abonnement ») ; si elle ne repart pas, elle reste en cours (`502`).
 - **La connexion par empreinte** (avec `SESSION_SECRET`, sinon `503` partout sous `/auth`) : le rpId est le nom d'hôte de la page
   (dans `ORIGINES`), l'origine attendue est la sienne, exactement. `POST /auth/options/inscription {"nom"}` (clé ou session) puis
-  `POST /auth/inscription` (le résultat de `navigator.credentials.create`, en JSON base64url) inscrivent l'appareil (20 par
-  personne au plus) et rendent une session ; `POST` (ou `GET`) `/auth/options/connexion` puis `POST /auth/connexion` (le résultat
+  `POST /auth/inscription` (le résultat de `navigator.credentials.create`, en JSON base64url, avec un `nom` facultatif qui
+  remplace celui des options : la page sait seulement après la création si la clé vit sur un autre appareil, le téléphone par QR
+  code ou une clé USB) inscrivent l'appareil (20 par personne au plus) et rendent une session ; `POST` (ou `GET`) `/auth/options/connexion` puis `POST /auth/connexion` (le résultat
   de `navigator.credentials.get`) rendent `{ session, exp, qui, appareil }`. Les options sont à plat et sous `publicKey`.
   Une session dure 12 heures (`exp` en millisecondes) ; elle vaut la clé partout (`Authorization: Bearer <session>`) tant que
   l'appareil est inscrit et que la personne a une clé dans `CLES` (retirer quelqu'un de `CLES` retire aussi ses appareils).

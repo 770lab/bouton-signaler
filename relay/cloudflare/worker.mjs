@@ -493,8 +493,8 @@ async function optionsInscriptionRoute(req, env, st, cors) {
   return json(Object.assign({ ok: true }, o, { publicKey: o }), 200, cors);
 }
 
-// POST /auth/inscription <credential> : l'appareil vérifié est rangé (« appareil:<id> », sans fin) et ajouté à la liste de la
-// personne ; la réponse porte une session neuve.
+// POST /auth/inscription <credential> (+ « nom », facultatif : le nom corrigé après la création, C.nomInscrit) : l'appareil vérifié
+// est rangé (« appareil:<id> », sans fin) et ajouté à la liste de la personne ; la réponse porte une session neuve.
 async function inscription(req, env, st, cors) {
   const rp = rpDe(req, env);
   if (!rp) return json(NON_AUTORISEE, 403, cors);
@@ -508,7 +508,7 @@ async function inscription(req, env, st, cors) {
   if (!C.nomsDesCles(env.CLES).includes(defi.qui)) return json({ ok: false, erreur: 'cette personne n’a plus de clé d’équipe' }, 403, cors);
   if (await lireAppareil(st, v.id)) return json({ ok: false, erreur: 'cet appareil est déjà inscrit' }, 409, cors);
   const quand = Date.now();
-  const ap = { id: v.id, qui: defi.qui, rpId: rp.rpId, nom: defi.nom, alg: v.alg, jwk: v.jwk, signCount: v.signCount, idPersonne: defi.idPersonne,
+  const ap = { id: v.id, qui: defi.qui, rpId: rp.rpId, nom: C.nomInscrit(b.corps.nom, defi.nom), alg: v.alg, jwk: v.jwk, signCount: v.signCount, idPersonne: defi.idPersonne,
     transports: v.transports, creeLe: quand, vuLe: quand };
   await st.ecrireTexte(C.cleAppareil(v.id), JSON.stringify(ap));
   await st.ecrireTexte(C.cleAppareils(defi.qui), JSON.stringify(C.appareilsAvec(lireJson(await st.lireTexte(C.cleAppareils(defi.qui))), v.id)));
