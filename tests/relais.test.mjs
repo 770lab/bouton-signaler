@@ -172,6 +172,12 @@ test('le relais de bout en bout : clé, origine, pièces rangées, routine prév
   assert.ok(R.appels[0].corps.text.includes(BASE + '/piece/' + id));
   const piece = await worker.fetch(new Request(BASE + '/piece/' + id), env);
   assert.equal(piece.status, 200); assert.equal(piece.headers.get('Content-Type'), 'image/png'); assert.equal(piece.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(piece.headers.get('Access-Control-Allow-Origin'), null, 'sans Origin (une balise <img>) : pas de CORS');
+  // Relue par fetch depuis une page d'ORIGINES (CSP img-src sans le relais) : CORS pour elle seule, jamais pour une autre.
+  const parFetch = await worker.fetch(new Request(BASE + '/piece/' + id, { headers: { Origin: ORIGINE } }), env);
+  assert.equal(parFetch.status, 200); assert.equal(parFetch.headers.get('Access-Control-Allow-Origin'), ORIGINE); assert.match(parFetch.headers.get('Vary') || '', /Origin/);
+  const autre = await worker.fetch(new Request(BASE + '/piece/' + id, { headers: { Origin: 'https://pirate.exemple' } }), env);
+  assert.equal(autre.headers.get('Access-Control-Allow-Origin'), null, 'une page hors ORIGINES ne lit pas la pièce par fetch');
   assert.equal((await worker.fetch(new Request(BASE + '/piece/' + 'f'.repeat(32)), env)).status, 404);
 });
 

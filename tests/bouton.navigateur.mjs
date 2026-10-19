@@ -49,7 +49,9 @@ const site = http.createServer((req, res) => {
   }
   const p = join(RACINE, chemin);
   if (!p.startsWith(RACINE) || !existsSync(p)) { res.writeHead(404); return res.end(); }
-  const csp = chemin === '/demo/index.html' && u.searchParams.get('csp') === 'img' ? { 'Content-Security-Policy': "img-src 'self' data: blob:" } : {};
+  // ?csp=strict : img-src sans blob: non plus (la capture relue par fetch reste refusée : la vignette le dit).
+  const CSPS = { img: "img-src 'self' data: blob:", strict: "img-src 'self' data:" };
+  const csp = chemin === '/demo/index.html' && CSPS[u.searchParams.get('csp')] ? { 'Content-Security-Policy': CSPS[u.searchParams.get('csp')] } : {};
   res.writeHead(200, Object.assign({ 'Content-Type': TYPES[extname(p)] || 'application/octet-stream' }, csp)); res.end(readFileSync(p));
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
@@ -290,7 +292,7 @@ async function page(taille, o = {}) {
   // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site) · o.csp : la CSP des images du pupitre
   await p.goto((o.origine || ORIGINE) + (o.chemin || '/demo/index.html') + '?relais=' + encodeURIComponent(o.relais || RELAIS)
     + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : '')
-    + (o.csp ? '&csp=img' : ''));
+    + (o.csp ? '&csp=' + (o.csp === true ? 'img' : o.csp) : ''));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
@@ -1506,10 +1508,49 @@ try {
       + (tient && Math.abs(b2.y - b1.y) < 1 ? '' : ' (tient ' + tient + ', décalage ' + (b2.y - b1.y) + ' px)'));
   }
   await E.ctx.close();
-  // h) Une page dont la CSP refuse les images du relais (img-src 'self' data: blob:, le pupitre avant sa correction) : la vignette le
-  // dit au lieu d'un cadre vide, et la toucher ouvre la capture dans un nouvel onglet (adresse du relais).
+  // h) Une page dont la CSP refuse les images du relais mais admet blob: (img-src 'self' data: blob:, comme Avinou Malkenou qui
+  // n'admet le relais qu'en connect-src) : les captures sont relues par fetch et montrées depuis la mémoire, en vignette et en grand.
   {
     const G = await surVrai({ width: 412, height: 915 }, { cle: CLE, csp: true });
+    await G.p.waitForSelector('.sgn-fab');
+    await G.p.evaluate(() => window.Signaler.demandes('toutes'));
+    await G.p.waitForSelector('.sgn-carte .sgn-ap', { timeout: 10000 });
+    const vues = await G.p.waitForFunction(() => {
+      const im = [...document.querySelectorAll('.sgn-ap img')];
+      return im.length >= 2 && im.every((i) => i.src.startsWith('blob:') && i.complete && i.naturalWidth > 0) && !document.querySelector('.sgn-ap-ko');
+    }, null, { timeout: 8000 }).then(() => true, () => false);
+    await G.p.$eval('.sgn-ap[data-k="apres"]', (b) => b.scrollIntoView({ block: 'center' }));
+    await capture(G.p, 'images-memoire-412-light.png');
+    await G.p.click('.sgn-ap[data-k="apres"]');
+    const grand = await G.p.waitForFunction(() => { const i = document.querySelector('.sgn-vis img'); return !!(i && i.src.startsWith('blob:') && i.complete && i.naturalWidth > 0); }, null, { timeout: 8000 }).then(() => true, () => false);
+    await capture(G.p, 'images-memoire-grand-412-light.png');
+    ok(vues && grand, 'page dont la CSP refuse les images du relais (blob: admis) : les captures avant / après sont relues par fetch et montrées, en vignette et en grand'
+      + (vues ? '' : ' (vignettes absentes)') + (grand ? '' : ' (visionneuse vide)'));
+    await G.p.keyboard.press('Escape');
+    // Verrouillage (Avinou Malkenou) : oublier() libère les images gardées en mémoire.
+    const libere = await G.p.evaluate(async () => {
+      const u = document.querySelector('.sgn-ap img') ? document.querySelector('.sgn-ap img').src : '';
+      window.Signaler.oublier();
+      try { await fetch(u); return false; } catch (e) { return true; }
+    });
+    ok(libere, 'oublier() libère les captures gardées en mémoire (l’adresse blob: ne répond plus)');
+    // Verrouillage puis déverrouillage (config.js d'Avinou Malkenou : oublier() + cacher(), puis oublier() + montrer()) : le rond
+    // existe déjà, la liste oubliée est relue et le nombre des demandes à traiter revient sans ouvrir la feuille.
+    const nb = () => G.p.evaluate(() => { const n = document.querySelector('.sgn-badge'); return n && n.style.display !== 'none' ? n.textContent : ''; });
+    await G.p.evaluate(() => { window.Signaler.cacher(); window.Signaler.oublier(); });
+    const cache = await nb();
+    await G.p.evaluate(() => { window.Signaler.oublier(); window.Signaler.montrer(); });
+    const revient = await G.p.waitForFunction(() => { const n = document.querySelector('.sgn-badge'); return !!n && n.style.display !== 'none' && Number(n.textContent) > 0; }, null, { timeout: 8000 }).then(() => true, () => false);
+    ok(cache === '' && revient && !(await G.p.$('.sgn-fond')), 'verrouillage puis déverrouillage (oublier, montrer) : le nombre des demandes à traiter revient, la feuille reste fermée'
+      + (cache === '' ? '' : ' (nombre encore montré après oublier : ' + cache + ')') + (revient ? '' : ' (nombre absent après montrer)'));
+    const pbM = await controler(G.p);
+    ok(!pbM.length && !G.erreursPage.length, '412 px, images relues : mise en page' + (pbM.length ? ' — ' + pbM.join(' ; ') : '') + (G.erreursPage.length ? ' — ' + G.erreursPage.join(' ; ') : ''));
+    await G.ctx.close();
+  }
+  // h2) Une page qui refuse aussi blob: (img-src 'self' data:) : la vignette le dit au lieu d'un cadre vide, et la toucher ouvre la
+  // capture dans un nouvel onglet (adresse du relais).
+  {
+    const G = await surVrai({ width: 412, height: 915 }, { cle: CLE, csp: 'strict' });
     const LOGG = []; G.p.on('console', (m) => LOGG.push(m.type() + ': ' + m.text())); G.p.on('requestfailed', (r) => LOGG.push('échec ' + r.method() + ' ' + r.url() + ' ' + (r.failure() || {}).errorText));
     await G.p.waitForSelector('.sgn-fab');
     await G.p.evaluate(() => window.Signaler.demandes('toutes'));
