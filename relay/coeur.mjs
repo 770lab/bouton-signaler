@@ -214,18 +214,19 @@ export async function prevenirRoutine(o) {
 export const messageRoutine = (r) => (r.coupe ? 'le relais n’est pas encore relié à Claude' : 'Claude n’a pas pu être prévenu (' + r.erreur + ')');
 
 // LES DEMANDES (« Mes demandes » du bouton). Rangées sous « demande:<réf> » ; la liste de chaque personne sous « demandes:<nom> »
-// (les 50 dernières réfs, la plus récente d'abord) ; l'interrupteur du pupitre sous « etat ». Aucune de ces clés n'a la forme
-// d'une pièce (32 hex) : GET /piece ne peut pas les lire.
+// (les 50 dernières réfs, la plus récente d'abord) ; les interrupteurs du pupitre (général et par projet) sous « etat ».
+// Aucune de ces clés n'a la forme d'une pièce (32 hex) : GET /piece ne peut pas les lire.
 export const CLE_ETAT = 'etat';
 export const cleDemande = (id) => 'demande:' + id;
 export const cleIndex = (qui) => 'demandes:' + qui;
 
-// La demande telle qu'elle est rangée juste après l'appel à la routine. `s` = le signalement vérifié (lireSignalement),
+// La demande telle qu'elle est rangée juste après l'appel à la routine (avec son projet, d'après l'adresse de la page ; null
+// pour une page d'aucun projet). `s` = le signalement vérifié (lireSignalement),
 // `r` = la réponse de prevenirRoutine, `retourHash` = l'empreinte du jeton de retour, `texteRoutine` = le texte SANS son bloc RETOUR.
 export function nouvelleDemande(o) {
   const s = o.s, c = s.contexte;
   const d = { id: o.id, creeLeMs: o.quand, majLeMs: o.quand, qui: o.qui, type: s.type, texte: s.texte,
-    page: { url: c.url, titre: c.titre }, captures: s.captures.length, audio: !!s.audio, etat: 'envoyee' };
+    page: { url: c.url, titre: c.titre }, projet: projetDeLaPage(c.url), captures: s.captures.length, audio: !!s.audio, etat: 'envoyee' };
   return apresEnvoi(d, o.r, o);
 }
 
@@ -248,12 +249,15 @@ export function apresRetour(d, r, quand) {
 }
 
 // Ce qu'une page a le droit de voir d'une demande : une liste blanche. Jamais l'empreinte du jeton ni le texte de la routine.
-// Le lien de la session Claude seulement si le relais le montre déjà après l'envoi (MONTRER_SUIVI = « oui »).
-const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'qui', 'type', 'texte', 'page', 'captures', 'audio', 'etat', 'erreur', 'sessionUrl', 'resume', 'liens'];
+// Le lien de la session Claude seulement si le relais le montre déjà après l'envoi (MONTRER_SUIVI = « oui »). Le projet : celui
+// de la demande, ou, pour une demande rangée avant les projets, celui de l'adresse de sa page (absent : aucun projet).
+const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'qui', 'type', 'texte', 'page', 'projet', 'captures', 'audio', 'etat', 'erreur', 'sessionUrl', 'resume', 'liens'];
 export function demandePublique(d, o) {
   const x = {};
   CHAMPS_PUBLICS.forEach((k) => { if (d && d[k] !== undefined && d[k] !== null) x[k] = d[k]; });
   if (!(o && o.suivi)) delete x.sessionUrl;
+  const projet = projetDeLaDemande(d);
+  if (projet) x.projet = projet; else delete x.projet;
   return x;
 }
 
@@ -289,20 +293,86 @@ export function lireRetour(corps) {
   return { ok: true, r: r };
 }
 
-// L'INTERRUPTEUR DU PUPITRE (« Activé partout / Coupé partout »). Corps de POST /etat : { actif: true|false }.
+// LES PROJETS qui portent le bouton, dans l'ordre du pupitre (une ligne par projet, chacune avec son interrupteur).
+// KOULAM a sa propre bulle « Modifier avec Claude » et sa propre routine (un autre abonnement Claude) : il n'envoie rien à ce relais,
+// il lit seulement GET /etat?projet=koulam pour savoir s'il peut montrer sa bulle.
+export const PROJETS = Object.freeze([
+  { id: 'home', nom: 'Home' },
+  { id: 'pupitre', nom: 'Pupitre' },
+  { id: 'havroutia', nom: 'HavroutIA' },
+  { id: 'avinou', nom: 'Avinou Malkenou' },
+  { id: 'koulam', nom: 'KOULAM' },
+].map((p) => Object.freeze(p)));
+export const estProjet = (id) => typeof id === 'string' && PROJETS.some((p) => p.id === id);
+
+// Le projet d'une page, d'après son adresse (la même règle que le bouton) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
+// 770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam. Une autre adresse : null (aucun projet,
+// seul l'interrupteur général compte).
+export function projetDeLaPage(url) {
+  let u;
+  try { u = new URL(String(url || '')); } catch (e) { return null; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+  const hote = u.hostname.toLowerCase().replace(/^www\./, ''), chemin = (u.pathname || '/').toLowerCase();
+  if (hote === '770lab.com') {
+    if (chemin.startsWith('/home/robots')) return 'pupitre';
+    if (chemin.startsWith('/home')) return 'home';
+    if (chemin.startsWith('/havroutia')) return 'havroutia';
+    return null;
+  }
+  if (hote === 'avinou-malkenou.web.app') return 'avinou';
+  if (hote === 'koulam.app') return 'koulam';
+  return null;
+}
+// Le projet d'une demande rangée : son champ « projet » (demandes récentes), sinon l'adresse de sa page (demandes d'avant).
+export const projetDeLaDemande = (d) => (d && estProjet(d.projet) ? d.projet
+  : projetDeLaPage(d && d.page && typeof d.page === 'object' ? d.page.url : ''));
+
+// LES INTERRUPTEURS DU PUPITRE : un GÉNÉRAL (« Activé partout / Coupé partout ») et un PAR PROJET. Le bouton d'un projet se montre
+// seulement si les deux sont activés. Rangés ensemble sous « etat » : { actif, depuis, par, projets: { <id>: { actif, depuis, par } } }.
+// Un projet absent (ou un ancien état sans « projets ») : activé.
+// Corps de POST /etat : { actif: true|false } (le général) ou { actif: true|false, projet: "<id>" } (ce projet seulement).
 export function lireEtatBouton(corps) {
   if (!corps || typeof corps !== 'object' || Array.isArray(corps) || typeof corps.actif !== 'boolean')
     return { ok: false, erreur: 'réglage illisible : {"actif": true} ou {"actif": false}' };
-  return { ok: true, actif: corps.actif };
+  if (corps.projet === undefined || corps.projet === null) return { ok: true, actif: corps.actif };
+  if (!estProjet(corps.projet)) return { ok: false, erreur: 'projet inconnu' };
+  return { ok: true, actif: corps.actif, projet: corps.projet };
 }
-// L'état tel qu'il est rangé → ce que voit tout le monde. Rien de rangé (ou illisible) : activé.
-export function etatBouton(x) {
+// Un interrupteur tel qu'il est rangé → sa forme lisible. Rien de rangé (ou illisible) : activé.
+function interrupteur(x) {
   if (!x || typeof x !== 'object' || typeof x.actif !== 'boolean') return { actif: true, depuis: null, par: null };
   return { actif: x.actif, depuis: Number.isFinite(x.depuis) ? x.depuis : null, par: x.par ? propre(x.par, 60) : null };
 }
-// Le nouvel état à ranger. Le même que celui déjà rangé : « depuis » et « par » ne bougent pas (ils disent quand il a changé).
-export function changerEtatBouton(stocke, actif, qui, quand) {
-  const avant = etatBouton(stocke);
-  if (stocke && avant.actif === actif && avant.depuis !== null) return avant;
-  return { actif: actif, depuis: quand, par: propre(qui, 60) || null };
+// L'état tel qu'il est rangé → ce que voit tout le monde : le général, et TOUS les projets de PROJETS (valeurs par défaut comprises).
+export function etatBouton(x) {
+  const e = interrupteur(x);
+  const p = x && typeof x === 'object' && x.projets && typeof x.projets === 'object' && !Array.isArray(x.projets) ? x.projets : {};
+  e.projets = {};
+  PROJETS.forEach(({ id }) => { e.projets[id] = interrupteur(Object.prototype.hasOwnProperty.call(p, id) ? p[id] : null); });
+  return e;
+}
+// Le nouvel état à ranger (sans `projet` : le général ; avec : ce projet seulement, les autres ne bougent pas). Le même état que
+// celui déjà rangé : « depuis » et « par » ne bougent pas (ils disent quand il a changé).
+export function changerEtatBouton(stocke, actif, qui, quand, projet) {
+  const e = etatBouton(stocke);
+  const basculer = (avant) => (avant.actif === actif && avant.depuis !== null ? avant : { actif: actif, depuis: quand, par: propre(qui, 60) || null });
+  if (projet === undefined || projet === null) return Object.assign(basculer({ actif: e.actif, depuis: e.depuis, par: e.par }), { projets: e.projets });
+  if (!estProjet(projet)) throw new Error('projet inconnu');
+  e.projets[projet] = basculer(e.projets[projet]);
+  return e;
+}
+// Le bouton de ce projet peut-il se montrer (et envoyer) ? Le général ET celui du projet. Sans projet : le général seul.
+export function boutonActif(e, projet) {
+  e = etatBouton(e);
+  return e.actif && (!estProjet(projet) || e.projets[projet].actif);
+}
+// La réponse de GET /etat (et de POST /etat). `o.projet` : ajoute « projet » et « effectif » (général ET ce projet).
+// `o.masquer` (une page hors d'ORIGINES) : ni « depuis » ni « par », nulle part (le nom de qui a coupé ne la regarde pas).
+export function vueEtat(e, o) {
+  e = etatBouton(e); o = o || {};
+  const cache = (i) => (o.masquer ? { actif: i.actif, depuis: null, par: null } : { actif: i.actif, depuis: i.depuis, par: i.par });
+  const v = Object.assign({ ok: true }, cache(e), { projets: {} });
+  PROJETS.forEach(({ id }) => { v.projets[id] = cache(e.projets[id]); });
+  if (estProjet(o.projet)) { v.projet = o.projet; v.effectif = boutonActif(e, o.projet); }
+  return v;
 }

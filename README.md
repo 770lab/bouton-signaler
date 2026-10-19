@@ -10,7 +10,8 @@ Quand la correction est en ligne, on rafraîchit la page.
 - Seules les personnes qui ont une **clé d'équipe** peuvent envoyer un signalement.
 - **Mes demandes** : depuis le bouton, chacun retrouve ses demandes et leur état (en cours, à relire avec le lien de la PR,
   question, rien à faire, échec…). La routine renvoie cet état au relais à la fin de chaque session.
-- Un **interrupteur** (depuis un pupitre ou en ligne de commande) affiche ou retire le bouton partout d'un seul geste.
+- Un **interrupteur** (depuis un pupitre ou en ligne de commande) affiche ou retire le bouton partout d'un seul geste, et un
+  interrupteur **par projet** (liste `PROJETS` de `relay/coeur.mjs`) le retire d'un seul projet.
 
 ## Installer avec Claude
 
@@ -29,7 +30,7 @@ l'option sans serveur — un compte Cloudflare gratuit.
 | Fichier | Rôle |
 |---|---|
 | `widget/signaler.js` | le bouton et sa fenêtre (sans dépendance ; html2canvas chargé à la demande) |
-| `relay/coeur.mjs` | les règles du relais : clés, origines, limites, texte pour Claude, appel à la routine, demandes et leur état, interrupteur |
+| `relay/coeur.mjs` | les règles du relais : clés, origines, limites, texte pour Claude, appel à la routine, demandes et leur état, interrupteurs (général et par projet) |
 | `relay/cloudflare/` | le relais prêt à déployer (Worker + Workers KV, ou R2) |
 | `routine/consignes.md` | les consignes à coller dans la routine (PR à relire, ou fusion automatique) |
 | `INSTALL.md` | la procédure que suit Claude |
