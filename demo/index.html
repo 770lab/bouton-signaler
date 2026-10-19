@@ -29,7 +29,9 @@
       <button class="panne" id="panne">Enregistrer (ce bouton plante)</button>
     </div>
     <p>Touchez le rond orange de Claude en bas à droite : il photographie cet écran, vous laisse écrire ou dicter, et envoie le tout au relais.</p>
-    <p>Le petit nombre rouge sur le rond compte vos demandes à traiter (une question de Claude, une PR à relire, une demande pas partie) : touchez-le pour les voir.</p>
+    <p>Le petit nombre rouge sur le rond compte vos demandes à traiter (une question de Claude, une PR à relire, une modification à valider, une demande pas partie) : touchez-le pour les voir.</p>
+    <p>Dans « Mes demandes », chaque modification montre ses captures avant / après (touchez-en une pour la voir en grand). « Annuler », gardé appuyé une seconde, retire du site une modification en ligne ; « Mettre en ligne » publie une modification à valider, après votre empreinte.</p>
+    <p>La connexion : la première fois, votre clé d’équipe ; le bouton propose ensuite d’activer l’empreinte sur cet appareil, et le doigt (ou le visage) suffit.</p>
     <p>Chaque projet a son propre interrupteur sur le pupitre : coupé, le rond ne paraît plus sur ses pages (l’interrupteur général coupe tout).</p>
     <p class="actions"><button class="lien" id="mes-demandes">Voir mes demandes</button> <button class="lien" id="demandes-projet">Celles de Home</button></p>
     <div class="carte" id="boite-noire">
@@ -56,6 +58,7 @@
     document.getElementById('demandes-projet').addEventListener('click', function () { if (window.Signaler) window.Signaler.demandes({ projet: 'home' }); });
     // Démo : adresse du relais passée dans l'URL (?relais=http://localhost:8787), sinon le relais local de développement ;
     // ?projet=home (ou pupitre, havroutia, avinou) : le projet de la page, sinon d'après son adresse (ici, aucun).
+    // L'empreinte (WebAuthn) ne marche qu'en https ou sur http://localhost : ouvrir la démo par localhost, pas par 127.0.0.1.
     var q = new URLSearchParams(location.search);
     window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
   </script>
