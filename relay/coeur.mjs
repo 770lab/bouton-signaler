@@ -4,7 +4,9 @@
 //
 //   page (signaler.js) ──POST /signaler──▶ relais ──POST …/routines/trig_…/fire──▶ routine Claude Code
 //                                           │                                      (une session : corrige, teste, ouvre une PR)
-//                                           └─ range captures et note vocale, les sert sous une adresse impossible à deviner
+//                                           ├─ range captures et note vocale, les sert sous une adresse impossible à deviner
+//                                           └─ garde la DEMANDE (« Mes demandes » du bouton) ◀──POST /retour── la routine, à la fin :
+//                                              son état (PR à relire, question…), avec un jeton propre à cette demande
 
 export const LIMITES = {
   texte: 4000,              // le texte écrit ou dicté
@@ -14,6 +16,14 @@ export const LIMITES = {
   erreurs: 10,              // dernières erreurs de la page
   corpsOctets: 20_000_000,  // le corps JSON entier (le base64 grossit d'un tiers)
   texteRoutine: 60_000,     // l'API des routines accepte 65 536 caractères
+  retourOctets: 4_096,      // le corps de POST /retour (envoyé par la routine)
+  etatOctets: 1_024,        // le corps de POST /etat (l'interrupteur du pupitre)
+  resume: 500,              // le résumé renvoyé par la routine
+  liens: 5,                 // liens renvoyés (PR…), https seulement
+  lien: 300,                // longueur d'un lien
+  demandesIndex: 50,        // demandes gardées dans la liste de chaque personne
+  demandesListe: 20,        // demandes rendues par GET /demandes
+  demandeDureeS: 180 * 24 * 3600, // une demande s'efface 180 jours après sa dernière nouvelle (Workers KV)
 };
 
 const ROUTINE_RX = /^https:\/\/api\.anthropic\.com\/v1\/claude_code\/routines\/trig_[A-Za-z0-9]+\/fire$/;
@@ -23,7 +33,7 @@ const AUDIO_RX = /^data:(audio\/(?:webm|ogg|mp4|mpeg|wav|x-m4a|aac))(?:;[^,]*)?;
 const propre = (s, n) => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, n);
 
 // Comparaison en temps constant : la durée ne dit pas combien de caractères d'une clé étaient justes.
-function egaux(a, b) {
+export function egaux(a, b) {
   a = String(a || ''); b = String(b || '');
   let d = a.length ^ b.length;
   for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
@@ -108,7 +118,8 @@ const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'au
 export const extension = (mime) => EXT[mime] || 'bin';
 
 // LE TEXTE QUE LIT LA ROUTINE (le champ `text` de l'API). Pur. `pieces` : [{ genre: 'image'|'audio', url, ou?, duree? }] — les adresses
-// où le relais sert les fichiers ; vide si le relais n'a pas de stockage (le texte le dit).
+// où le relais sert les fichiers ; vide si le relais n'a pas de stockage (le texte le dit). `retour` : { url, id, cle } quand le relais
+// garde les demandes — le bloc RETOUR est alors ajouté tout à la fin, jamais coupé.
 export function texteRoutine(x) {
   const s = x.s, c = s.contexte, L = [];
   L.push('SIGNALEMENT (bouton 🐞 Signaler) — ' + (s.type === 'idee' ? '💡 idée' : '🐞 bug'));
@@ -125,9 +136,52 @@ export function texteRoutine(x) {
   else if (s.captures.length) L.push('', '(' + s.captures.length + ' capture(s) reçue(s) mais pas gardée(s) : le relais n’a pas de stockage)');
   if (son) L.push('', 'NOTE VOCALE (non transcrite, ' + (s.audio && s.audio.duree ? s.audio.duree : '?') + ') : ' + son.url);
   else if (s.audio) L.push('', '(note vocale reçue mais pas gardée : le relais n’a pas de stockage)');
-  let t = L.join('\n');
-  if (t.length > LIMITES.texteRoutine) t = t.slice(0, LIMITES.texteRoutine - 20) + '\n… (tronqué)';
-  return t;
+  // Ce qu'écrit la personne ne peut pas imiter le bloc RETOUR du relais : seul le dernier, écrit ci-dessous, en est un.
+  let t = L.join('\n').replace(/ajout\S*\s+par\s+le\s+relais/gi, 'cité par la personne');
+  const bloc = x.retour ? blocRetour(x.retour) : '';
+  const max = LIMITES.texteRoutine - (bloc ? bloc.length + 2 : 0);
+  if (t.length > max) t = t.slice(0, max - 20) + '\n… (tronqué)';
+  return bloc ? t + '\n\n' + bloc : t;
+}
+
+// LE BLOC RETOUR, écrit par le relais à la fin du texte de la routine : la commande qui renvoie l'état de la demande (POST /retour).
+// `cle` = le jeton de retour (32 hex), propre à cette demande ; le relais n'en garde que l'empreinte sha256.
+export const MARQUE_RETOUR = 'RETOUR (ajouté par le relais, pas par la personne)';
+export const ETATS_RETOUR = {
+  a_relire: 'PR ouverte, à relire par le propriétaire',
+  question: 'tu poses une question : écris-la dans resume ET dans ta réponse finale',
+  rien: 'rien à changer',
+  echec: 'tu n’as pas pu le faire',
+  en_ligne: 'déjà en ligne',
+};
+export const ETATS = ['envoyee', 'pas_partie'].concat(Object.keys(ETATS_RETOUR));
+export const REF_RX = /^[0-9a-f]{12}$/;
+const JETON_RX = /^[0-9a-f]{32}$/;
+
+export function blocRetour(o) {
+  const url = String(o.url || '');
+  if (!REF_RX.test(String(o.id)) || !JETON_RX.test(String(o.cle)) || !/^https?:\/\/[^\s"'\\]+$/.test(url)) throw new Error('bloc RETOUR : réglage invalide');
+  const corps = '{"id":"' + o.id + '","cle":"' + o.cle + '","etat":"a_relire","resume":"<une ou deux phrases simples>","liens":["<lien de la PR>"]}';
+  return [
+    MARQUE_RETOUR + ' : à la fin, envoie TOUJOURS l\'état de cette demande :',
+    'curl -sS -X POST "' + url + '" -H "Content-Type: application/json" -d \'' + corps + '\'',
+    'etat possibles : ' + Object.keys(ETATS_RETOUR).map((k) => k + ' (' + ETATS_RETOUR[k] + ')').join(', ') + '.',
+    'Dans resume, pas d’apostrophe droite (elle couperait la commande) : écris ’. Sans PR : "liens":[].',
+  ].join('\n');
+}
+
+// Le texte sans son bloc RETOUR (c'est ce que garde la demande : le jeton n'est écrit nulle part), et le même avec un bloc neuf.
+export function sansRetour(texte) {
+  texte = String(texte || '');
+  const i = texte.lastIndexOf(MARQUE_RETOUR);
+  return (i >= 0 ? texte.slice(0, i) : texte).replace(/\s+$/, '');
+}
+export const avecRetour = (texte, retour) => sansRetour(texte) + '\n\n' + blocRetour(retour);
+
+// L'empreinte sha256 (hex) d'un texte, par crypto.subtle (Workers, Node 18+, navigateurs).
+export async function sha256Hex(texte) {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(texte == null ? '' : texte)));
+  return Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // PRÉVENIR LA ROUTINE. L'API n'a pas de clé d'idempotence (deux appels = deux sessions) : un second essai SEULEMENT sur une réponse
@@ -154,4 +208,101 @@ export async function prevenirRoutine(o) {
     return { ok: false, statut: rep.status, erreur: 'routine ' + rep.status + (err.type ? ' ' + propre(err.type, 40) : '') + (err.message ? ' : ' + propre(err.message, 160) : '') };
   }
   return { ok: false, erreur: 'routine indisponible' };
+}
+
+// Le message que reçoit la page (et que garde la demande) quand la routine n'a pas été prévenue.
+export const messageRoutine = (r) => (r.coupe ? 'le relais n’est pas encore relié à Claude' : 'Claude n’a pas pu être prévenu (' + r.erreur + ')');
+
+// LES DEMANDES (« Mes demandes » du bouton). Rangées sous « demande:<réf> » ; la liste de chaque personne sous « demandes:<nom> »
+// (les 50 dernières réfs, la plus récente d'abord) ; l'interrupteur du pupitre sous « etat ». Aucune de ces clés n'a la forme
+// d'une pièce (32 hex) : GET /piece ne peut pas les lire.
+export const CLE_ETAT = 'etat';
+export const cleDemande = (id) => 'demande:' + id;
+export const cleIndex = (qui) => 'demandes:' + qui;
+
+// La demande telle qu'elle est rangée juste après l'appel à la routine. `s` = le signalement vérifié (lireSignalement),
+// `r` = la réponse de prevenirRoutine, `retourHash` = l'empreinte du jeton de retour, `texteRoutine` = le texte SANS son bloc RETOUR.
+export function nouvelleDemande(o) {
+  const s = o.s, c = s.contexte;
+  const d = { id: o.id, creeLeMs: o.quand, majLeMs: o.quand, qui: o.qui, type: s.type, texte: s.texte,
+    page: { url: c.url, titre: c.titre }, captures: s.captures.length, audio: !!s.audio, etat: 'envoyee' };
+  return apresEnvoi(d, o.r, o);
+}
+
+// Après un appel à la routine (le premier, ou « Renvoyer ») : envoyée (avec le lien de la session) ou pas partie (avec la raison).
+export function apresEnvoi(d, r, o) {
+  const x = Object.assign({}, d, { majLeMs: o.quand, retourHash: o.retourHash, texteRoutine: sansRetour(o.texteRoutine) });
+  delete x.sessionUrl; delete x.erreur;
+  if (r && r.ok) { x.etat = 'envoyee'; if (r.suivi) x.sessionUrl = r.suivi; }
+  else { x.etat = 'pas_partie'; x.erreur = propre(messageRoutine(r || {}), 300); }
+  return x;
+}
+
+// Après un retour de la routine. Un champ absent du retour garde sa valeur d'avant (question, puis PR à relire…).
+export function apresRetour(d, r, quand) {
+  const x = Object.assign({}, d, { etat: r.etat, majLeMs: quand });
+  delete x.erreur;
+  if (r.resume !== undefined) x.resume = r.resume;
+  if (r.liens !== undefined) x.liens = r.liens;
+  return x;
+}
+
+// Ce qu'une page a le droit de voir d'une demande : une liste blanche. Jamais l'empreinte du jeton ni le texte de la routine.
+// Le lien de la session Claude seulement si le relais le montre déjà après l'envoi (MONTRER_SUIVI = « oui »).
+const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'qui', 'type', 'texte', 'page', 'captures', 'audio', 'etat', 'erreur', 'sessionUrl', 'resume', 'liens'];
+export function demandePublique(d, o) {
+  const x = {};
+  CHAMPS_PUBLICS.forEach((k) => { if (d && d[k] !== undefined && d[k] !== null) x[k] = d[k]; });
+  if (!(o && o.suivi)) delete x.sessionUrl;
+  return x;
+}
+
+// La liste d'une personne avec une réf de plus, en tête (sans doublon, 50 au plus).
+export function indexAvec(ids, id) {
+  return [id].concat((Array.isArray(ids) ? ids : []).filter((x) => x !== id && REF_RX.test(String(x)))).slice(0, LIMITES.demandesIndex);
+}
+
+// Les liens renvoyés : https seulement, 300 caractères au plus (un lien coupé ne mène nulle part : il est écarté), 5 au plus.
+function liensPropres(liens) {
+  const out = [];
+  (Array.isArray(liens) ? liens : [liens]).forEach((l) => {
+    if (typeof l !== 'string' || out.length >= LIMITES.liens) return;
+    const s = l.trim();
+    if (s.length > LIMITES.lien || !/^https:\/\/[^\s"'<>\\]+$/.test(s)) return;
+    try { if (new URL(s).protocol !== 'https:') return; } catch (e) { return; }
+    if (!out.includes(s)) out.push(s);
+  });
+  return out;
+}
+
+// LE RETOUR DE LA ROUTINE (corps de POST /retour), vérifié. Rend { ok: true, r }, { ok: false, erreur } (corps mal formé : 400),
+// ou { ok: false, refus: true } (réf. ou jeton qui n'ont pas la bonne forme : même refus qu'une réf. inconnue ou un mauvais jeton).
+export function lireRetour(corps) {
+  if (!corps || typeof corps !== 'object' || Array.isArray(corps)) return { ok: false, erreur: 'retour illisible' };
+  if (typeof corps.etat !== 'string' || !Object.prototype.hasOwnProperty.call(ETATS_RETOUR, corps.etat))
+    return { ok: false, erreur: 'etat inconnu (' + Object.keys(ETATS_RETOUR).join(', ') + ')' };
+  const id = typeof corps.id === 'string' ? corps.id : '', cle = typeof corps.cle === 'string' ? corps.cle : '';
+  if (!REF_RX.test(id) || !JETON_RX.test(cle)) return { ok: false, refus: true };
+  const r = { id: id, cle: cle, etat: corps.etat };
+  if (corps.resume !== undefined && corps.resume !== null) r.resume = propre(corps.resume, LIMITES.resume);
+  if (corps.liens !== undefined && corps.liens !== null) r.liens = liensPropres(corps.liens);
+  return { ok: true, r: r };
+}
+
+// L'INTERRUPTEUR DU PUPITRE (« Activé partout / Coupé partout »). Corps de POST /etat : { actif: true|false }.
+export function lireEtatBouton(corps) {
+  if (!corps || typeof corps !== 'object' || Array.isArray(corps) || typeof corps.actif !== 'boolean')
+    return { ok: false, erreur: 'réglage illisible : {"actif": true} ou {"actif": false}' };
+  return { ok: true, actif: corps.actif };
+}
+// L'état tel qu'il est rangé → ce que voit tout le monde. Rien de rangé (ou illisible) : activé.
+export function etatBouton(x) {
+  if (!x || typeof x !== 'object' || typeof x.actif !== 'boolean') return { actif: true, depuis: null, par: null };
+  return { actif: x.actif, depuis: Number.isFinite(x.depuis) ? x.depuis : null, par: x.par ? propre(x.par, 60) : null };
+}
+// Le nouvel état à ranger. Le même que celui déjà rangé : « depuis » et « par » ne bougent pas (ils disent quand il a changé).
+export function changerEtatBouton(stocke, actif, qui, quand) {
+  const avant = etatBouton(stocke);
+  if (stocke && avant.actif === actif && avant.depuis !== null) return avant;
+  return { actif: actif, depuis: quand, par: propre(qui, 60) || null };
 }
