@@ -1600,6 +1600,28 @@
     if (u.length > 400 || !/\/piece\/[0-9a-f]{32}$/.test(u)) return '';
     return u.indexOf(base() + '/piece/') === 0 || /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/piece\/[0-9a-f]{32}$/.test(u) ? u : '';
   }
+  // Capture avant / après refusée par la CSP de la page (img-src sans le relais, comme Avinou Malkenou qui ne l'admet qu'en
+  // connect-src) : relue par fetch (le relais répond avec CORS aux ORIGINES) et montrée depuis la mémoire (blob:). Une seule
+  // tentative par image, seulement pour une adresse /piece/ du relais et une réponse image ; sinon siKo(). Oubliées par oublier().
+  var IMAGES_MEMOIRE = {};
+  function imageEnMemoire(i, siKo) {
+    var src = i.getAttribute('data-sgn-src') || i.getAttribute('src') || '';
+    if (i.getAttribute('data-sgn-src') || !window.fetch || !window.URL || !URL.createObjectURL || imageSure(src) !== src || src.indexOf(base() + '/piece/') !== 0) { siKo(); return; }
+    i.setAttribute('data-sgn-src', src);
+    if (IMAGES_MEMOIRE[src]) { i.src = IMAGES_MEMOIRE[src]; return; }
+    fetch(src, { credentials: 'omit', cache: 'force-cache' }).then(function (r) {
+      if (!r.ok) throw new Error('statut');
+      return r.blob();
+    }).then(function (b) {
+      if (!/^image\/(jpeg|png|webp)$/.test(b.type || '')) throw new Error('genre');
+      if (!IMAGES_MEMOIRE[src]) IMAGES_MEMOIRE[src] = URL.createObjectURL(b);
+      if (i.isConnected !== false) i.src = IMAGES_MEMOIRE[src];
+    }).catch(function () { siKo(); });
+  }
+  function oublierImages() {
+    Object.keys(IMAGES_MEMOIRE).forEach(function (k) { try { URL.revokeObjectURL(IMAGES_MEMOIRE[k]); } catch (e) {} });
+    IMAGES_MEMOIRE = {};
+  }
   function imagesDe(x) {
     var i = x && x.images && typeof x.images === 'object' ? x.images : {};
     return { avant: imageSure(i.avant), apres: imageSure(i.apres) };
@@ -1624,12 +1646,15 @@
         + '<div class="sgn-vis-i"><img src="' + h(im[c]) + '" alt="' + h(legende(x, c)) + '"></div><p class="sgn-vis-l">' + h(legende(x, c)) + '</p>';
     }
     montrer(k);
-    // Une page dont la CSP refuse les images du relais (img-src) : on le dit, avec un lien qui ouvre la capture dans un onglet.
+    // Une page dont la CSP refuse les images du relais (img-src) : relue par fetch (imageEnMemoire) ; refusée encore, on le dit,
+    // avec un lien qui ouvre la capture dans un onglet.
     vis.addEventListener('error', function (e) {
       var i = e.target, z = i && i.tagName === 'IMG' && i.parentNode;
       if (!z || !i.getAttribute('src')) return;
-      z.innerHTML = '<p class="sgn-vis-ko">Cette page bloque l’affichage de la capture. <a href="' + h(i.getAttribute('src'))
-        + '" target="_blank" rel="noopener noreferrer">Ouvrir la capture dans un nouvel onglet</a></p>';
+      imageEnMemoire(i, function () {
+        z.innerHTML = '<p class="sgn-vis-ko">Cette page bloque l’affichage de la capture. <a href="' + h(i.getAttribute('data-sgn-src') || i.getAttribute('src'))
+          + '" target="_blank" rel="noopener noreferrer">Ouvrir la capture dans un nouvel onglet</a></p>';
+      });
     }, true);
     vis.addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('[data-v]') : null, v = b ? b.getAttribute('data-v') : '';
@@ -1785,12 +1810,15 @@
   function creerFond() {
     fond = marquer(document.createElement('div')); fond.className = 'sgn-fond'; vueRendue = '';
     fond.addEventListener('click', clic);
-    // Vignette avant / après que la page refuse (CSP img-src sans le relais) : le cadre le dit, et le toucher ouvre un onglet.
+    // Vignette avant / après que la page refuse (CSP img-src sans le relais) : relue par fetch (imageEnMemoire) ; refusée encore,
+    // le cadre le dit, et le toucher ouvre un onglet.
     fond.addEventListener('error', function (e) {
       var i = e.target, b = i && i.tagName === 'IMG' && i.closest ? i.closest('.sgn-ap') : null;
       if (!b || b.classList.contains('sgn-ap-ko')) return;
-      b.classList.add('sgn-ap-ko');
-      b.setAttribute('aria-label', (b.getAttribute('aria-label') || '').replace(/ : voir en grand$/, '') + ' : bloquée par cette page, ouvrir dans un nouvel onglet');
+      imageEnMemoire(i, function () {
+        b.classList.add('sgn-ap-ko');
+        b.setAttribute('aria-label', (b.getAttribute('aria-label') || '').replace(/ : voir en grand$/, '') + ' : bloquée par cette page, ouvrir dans un nouvel onglet');
+      });
     }, true);
     fond.addEventListener('input', function (e) { if (e.target.classList.contains('sgn-texte')) { B.texte = e.target.value; sauver(); } });
     fond.addEventListener('change', function (e) { if (e.target.getAttribute('data-a') === 'importer') importer(e.target.files).then(function () { rendre(); }); });
@@ -2073,7 +2101,7 @@
       D.liste = null; D.erreur = ''; D.luA = 0; D.enCours = false; D.projet = null;
       BOITE.length = 0; ERREURS.length = 0;
       R.abonnements = null; R.luA = 0; EMP.offre = false;
-      fermerVisionneuse(true);
+      fermerVisionneuse(true); oublierImages();
       if (fond) fermer({ garder: true, sansFocus: true });
       effacerBrouillon();
       eteindreAlerte(); cacherBulle();

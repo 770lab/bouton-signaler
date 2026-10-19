@@ -577,13 +577,18 @@ async function auth(req, env, p, m) {
   return new Response('introuvable', { status: 404 });
 }
 
-async function piece(id, env) {
+// Une pièce se lit aussi par fetch depuis une page d'ORIGINES (CORS) : une page dont la CSP refuse les images du relais
+// (img-src) mais l'admet en connect-src (Avinou Malkenou) relit la capture avant / après et la montre depuis la mémoire.
+async function piece(req, id, env) {
   const st = stockage(env);
   if (!st) return new Response('introuvable', { status: 404 });
   const o = await st.get(id);
   if (!o) return new Response('introuvable', { status: 404 });
-  return new Response(o.body, { headers: { 'Content-Type': (o.httpMetadata && o.httpMetadata.contentType) || 'application/octet-stream',
-    'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline' } });
+  const cors = entetesCors(req, env);
+  const h = { 'Content-Type': (o.httpMetadata && o.httpMetadata.contentType) || 'application/octet-stream',
+    'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline', 'Vary': 'Origin' };
+  if (cors['Access-Control-Allow-Origin']) h['Access-Control-Allow-Origin'] = cors['Access-Control-Allow-Origin'];
+  return new Response(o.body, { headers: h });
 }
 
 // L'aiguillage. `outils` ({ fetch, attendre }) sert aux tests : une fausse routine.
@@ -602,7 +607,7 @@ export async function routeur(req, env, outils) {
     if (m === 'POST' && p === '/etat') return await changerEtat(req, env);
     if ((m === 'GET' || m === 'POST') && p === '/routine') return await routine(req, env);
     const x = PIECE_RX.exec(p);
-    if (m === 'GET' && x) return await piece(x[1], env);
+    if (m === 'GET' && x) return await piece(req, x[1], env);
   } catch (e) {
     // Une panne (stockage plein…) rend une réponse JSON lisible par la page ; le journal ne garde que la route et le genre d'erreur.
     console.log('[erreur]', JSON.stringify({ route: m + ' ' + p.replace(/[0-9a-f]{12,32}/g, '…').replace(/\/auth\/appareils\/[^/]+/, '/auth/appareils/…'), genre: (e && e.name) || '?' }));
