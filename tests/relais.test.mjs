@@ -995,7 +995,7 @@ for (const [alg, nom] of [[-7, 'ES256'], [-257, 'RS256']]) {
 
     assert.equal(ins.rep.status, 200, JSON.stringify(ins.j));
     assert.equal(ins.j.ok, true); assert.equal(ins.j.qui, 'marie');
-    assert.deepEqual(Object.keys(ins.j.appareil).sort(), ['creeLe', 'id', 'nom', 'rpId']);
+    assert.deepEqual(Object.keys(ins.j.appareil).sort(), ['creeLe', 'id', 'nom', 'rpId', 'sur']); assert.equal(ins.j.appareil.sur, true, 'le premier appareil de marie : de confiance');
     assert.deepEqual([ins.j.appareil.id, ins.j.appareil.nom, ins.j.appareil.rpId], [A.id, 'iPhone de marie', '770lab.com']);
     assert.ok(ins.j.exp >= avant + 12 * 3600 * 1000 && ins.j.exp <= Date.now() + 12 * 3600 * 1000, 'session de 12 h, en ms');
     const ap = appareilRange(env, A.id);
@@ -1026,7 +1026,7 @@ for (const [alg, nom] of [[-7, 'ES256'], [-257, 'RS256']]) {
     assert.deepEqual(liste.demandes.map((d) => d.id), [sig.ref]);
     const apps = await (await appel(env, null, 'GET', '/auth/appareils', { cle: null, entetes: bearer(s) })).json();
     assert.equal(apps.ok, true); assert.equal(apps.appareils.length, 1);
-    assert.deepEqual(Object.keys(apps.appareils[0]).sort(), ['actuel', 'creeLe', 'id', 'nom', 'rpId', 'vuLe']);
+    assert.deepEqual(Object.keys(apps.appareils[0]).sort(), ['actuel', 'creeLe', 'id', 'nom', 'rpId', 'sur', 'vuLe']);
     assert.equal(apps.appareils[0].actuel, true, 'cet appareil');
     assert.equal((await (await appel(env, null, 'GET', '/auth/appareils')).json()).appareils[0].actuel, false, 'avec la clé : aucun « actuel »');
     const ver = await (await appel(env, null, 'POST', '/auth/verifier', { origine: null, cle: null, corps: { session: s } })).json();
@@ -1724,6 +1724,134 @@ test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CL
   const sans = Object.assign(env0(), { PIECES: undefined }), R = routine();
   assert.equal((await appel(sans, R, 'POST', '/signaler', { corps: signalement() })).status, 200, 'sans stockage : CLES, comme avant');
   assert.equal((await appel(sans, R, 'POST', '/signaler', { cle: j.cle, corps: signalement() })).status, 401);
+});
+
+// ——— Les appareils de confiance : une clé d'équipe volée inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne ———
+
+const PAS_DE_CONFIANCE_CLE = { ok: false, confiance: true, erreur: 'Cet appareil a été ajouté avec la clé d’équipe seule : une nouvelle clé se crée avec l’empreinte d’un appareil de confiance (ton téléphone).' };
+const PAS_DE_CONFIANCE_VALIDER = { ok: false, confiance: true, erreur: 'cet appareil a été ajouté avec la clé d’équipe seule : mets en ligne avec l’empreinte d’un appareil de confiance (ton téléphone)' };
+
+test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne crée pas de clé et ne met pas en ligne, même après un changement de CLES au Terminal', async () => {
+  const env = envAuth(), R = routine(), A = await appareil(-7), X = await appareil(-7);
+  const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
+  const nouvelle = (s) => appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(s), corps: {} });
+  const statut = async (cle) => (await appel(env, R, 'GET', '/demandes', { cle: cle })).status;
+  // Le propriétaire (marie) inscrit son téléphone : le PREMIER appareil de marie, de confiance.
+  const a = await inscrire(env, A, { nom: 'Téléphone de marie' });
+  assert.equal(a.rep.status, 200, JSON.stringify(a.j)); assert.equal(a.j.appareil.sur, true); assert.equal(appareilRange(env, A.id).sur, true);
+  // Une demande à valider (avec sa PR), pour plus bas.
+  await appel(env, null, 'POST', '/etat', { corps: { projet: 'home', mode: 'valider' } });
+  const dem = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
+  await retourDe(env, { id: dem.ref, cle: jetonDe(R.appels[0].corps.text), etat: 'a_valider', liens: ['https://github.com/770lab/home/pull/12'] });
+  const valider = (s) => appel(env, R, 'POST', '/demandes/' + dem.ref + '/valider', { cle: null, entetes: bearer(s) });
+
+  // L'intrus a la clé de marie (volée) : il inscrit SON appareil avec la clé seule. Inscrit, connecté sous le nom de marie, avec une
+  // empreinte fraîche… mais pas de confiance : marie avait déjà un appareil.
+  const x = await inscrire(env, X, { cle: CLE_MARIE, nom: 'Inconnu' });
+  assert.equal(x.rep.status, 200, JSON.stringify(x.j)); assert.equal(x.j.qui, 'marie');
+  assert.equal(x.j.appareil.sur, false); assert.equal(appareilRange(env, X.id).sur, false);
+  assert.equal(C.sessionFraiche((await C.lireSession(x.j.session, SECRET, Date.now())).p, Date.now()), true, 'une empreinte aussi fraîche que celle du propriétaire');
+  // Une nouvelle clé : refusée (403 « confiance », pas « empreinte » : reposer le doigt sur CET appareil n'y changerait rien).
+  let rep = await nouvelle(x.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_CLE);
+  const cx = await connecter(env, X);
+  assert.equal(cx.rep.status, 200, 'il se reconnecte avec son empreinte');
+  rep = await nouvelle(cx.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_CLE);
+  assert.equal(env.PIECES_KV.objets.has('cle:marie'), false, 'rien de rangé');
+  assert.equal(await statut(CLE_MARIE), 200, 'la clé du propriétaire marche toujours');
+  // Mettre en ligne : refusé aussi, sans appeler la routine ; ce qui ne demande pas de confiance marche comme avant.
+  rep = await valider(cx.j.session);
+  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_VALIDER);
+  assert.equal(R.appels.length, 1); assert.equal(lireDemande(env, dem.ref).etat, 'a_valider');
+  assert.equal((await appel(env, R, 'GET', '/demandes', { cle: null, entetes: bearer(cx.j.session) })).status, 200);
+  // Un appareil ajouté avec la session d'un appareil PAS de confiance : pas de confiance non plus.
+  const Y = await appareil(-7);
+  const y = await inscrire(env, Y, { session: cx.j.session });
+  assert.equal(y.rep.status, 200); assert.equal(y.j.appareil.sur, false);
+  assert.equal((await nouvelle(y.j.session)).status, 403);
+  // « Mes appareils » montre lesquels le sont (le propriétaire y repère l'inconnu) ; /auth/verifier le dit aussi (l'API du Mac).
+  const liste = (await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(a.j.session) })).json()).appareils;
+  assert.deepEqual(Object.fromEntries(liste.map((ap) => [ap.id, ap.sur])), { [A.id]: true, [X.id]: false, [Y.id]: false });
+  const ver = async (s) => (await appel(env, null, 'POST', '/auth/verifier', { origine: null, cle: null, corps: { session: s } })).json();
+  assert.deepEqual([(await ver(cx.j.session)).valide, (await ver(cx.j.session)).sur], [true, false]);
+  assert.deepEqual([(await ver(a.j.session)).valide, (await ver(a.j.session)).sur], [true, true]);
+
+  // Le propriétaire change CLES au Terminal. L'intrus, toujours inscrit sous marie (marie est toujours dans CLES), se reconnecte :
+  // il ne reprend pas la main (avant, il recréait une clé qui l'emportait de nouveau sur celle du Terminal).
+  env.CLES = 'marie:' + AUTRE + ',paul:' + CLE_PAUL;
+  const cx2 = await connecter(env, X);
+  assert.equal(cx2.rep.status, 200, 'toujours inscrit tant qu’on ne le retire pas');
+  assert.equal((await nouvelle(cx2.j.session)).status, 403);
+  assert.equal(await statut(AUTRE), 200, 'la clé du Terminal reste la seule valable'); assert.equal(await statut(CLE_MARIE), 401);
+  assert.equal((await valider(cx2.j.session)).status, 403);
+  // Le propriétaire, avec l'empreinte de son téléphone : sa nouvelle clé, et la mise en ligne.
+  const ca = await connecter(env, A);
+  rep = await nouvelle(ca.j.session);
+  const neuve = await rep.json();
+  assert.equal(rep.status, 200, JSON.stringify(neuve)); assert.equal(await statut(neuve.cle), 200); assert.equal(await statut(AUTRE), 401);
+  rep = await valider(ca.j.session);
+  assert.equal(rep.status, 200, JSON.stringify(await rep.clone().json())); assert.equal(R.appels.length, 2);
+  // Il retire les appareils inconnus (la marche à suivre après une fuite) : leurs sessions ne valent plus rien, tout de suite.
+  for (const id of [X.id, Y.id]) assert.equal((await appel(env, null, 'POST', '/auth/appareils/' + id + '/retirer', { origine: ORIGINE_770, cle: null, entetes: bearer(ca.j.session), corps: {} })).status, 200);
+  assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(cx2.j.session) })).status, 401);
+  assert.equal((await connecter(env, X)).rep.status, 401);
+  // Un appareil ajouté AVEC la session d'un appareil de confiance : de confiance (il crée une clé à son tour).
+  const B = await appareil(-7);
+  const b = await inscrire(env, B, { session: ca.j.session, nom: 'iMac du bureau' });
+  assert.equal(b.rep.status, 200, JSON.stringify(b.j)); assert.equal(b.j.appareil.sur, true);
+  assert.equal((await nouvelle(b.j.session)).status, 200);
+});
+
+test('les appareils de confiance : le premier d’une personne (même après un essai abandonné), ceux d’avant ce changement ; tout retirer ne rouvre pas la porte', async () => {
+  // Pur : de confiance avec la session d'un appareil de confiance (un ancien, sans le champ, l'est), ou avec la clé seule pour qui
+  // n'a jamais eu d'appareil ; sinon non.
+  assert.equal(C.inscriptionDeConfiance({ appareil: { sur: true }, jamaisInscrit: false }), true);
+  assert.equal(C.inscriptionDeConfiance({ appareil: { id: 'x' }, jamaisInscrit: false }), true, 'un ancien appareil (sans le champ) : de confiance');
+  assert.equal(C.inscriptionDeConfiance({ appareil: { sur: false }, jamaisInscrit: true }), false, 'la session d’un appareil pas de confiance ne donne rien');
+  assert.equal(C.inscriptionDeConfiance({ appareil: null, jamaisInscrit: true }), true);
+  for (const o of [{ appareil: null, jamaisInscrit: false }, {}, null, undefined]) assert.equal(C.inscriptionDeConfiance(o), false, JSON.stringify(o));
+  for (const [ap, attendu] of [[{ sur: true }, true], [{}, true], [{ sur: false }, false], [null, false], [undefined, false]]) assert.equal(C.appareilDeConfiance(ap), attendu, JSON.stringify(ap));
+
+  const env = envAuth();
+  const nouvelle = (s) => appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(s), corps: {} });
+  // paul n'a jamais eu d'appareil : des options demandées puis abandonnées (rien d'inscrit), son premier appareil reste de confiance.
+  assert.equal((await appel(env, null, 'POST', '/auth/options/inscription', { origine: ORIGINE_770, cle: CLE_PAUL, corps: {} })).status, 200);
+  assert.equal(env.PIECES_KV.objets.has('appareils:paul'), false);
+  const P1 = await appareil(-7), P2 = await appareil(-7), P3 = await appareil(-7);
+  const p1 = await inscrire(env, P1, { cle: CLE_PAUL });
+  assert.equal(p1.rep.status, 200); assert.equal(p1.j.qui, 'paul'); assert.equal(p1.j.appareil.sur, true);
+  const rp = await nouvelle(p1.j.session), clePaul = (await rp.json()).cle;
+  assert.equal(rp.status, 200, 'son premier appareil crée une clé');
+  // Son 2e avec la clé seule : pas de confiance.
+  const p2 = await inscrire(env, P2, { cle: clePaul });
+  assert.equal(p2.rep.status, 200); assert.equal(p2.j.appareil.sur, false);
+  // Tout retirer (la clé suffit à retirer), puis inscrire avec la clé : toujours pas de confiance (la liste « appareils:paul »
+  // existe, vide : la porte du premier appareil ne se rouvre pas pour une clé volée).
+  for (const id of [P1.id, P2.id]) assert.equal((await appel(env, null, 'POST', '/auth/appareils/' + id + '/retirer', { origine: ORIGINE_770, cle: clePaul, corps: {} })).status, 200);
+  assert.deepEqual(JSON.parse(env.PIECES_KV.objets.get('appareils:paul').v), []);
+  const p3 = await inscrire(env, P3, { cle: clePaul });
+  assert.equal(p3.rep.status, 200); assert.equal(p3.j.appareil.sur, false);
+  assert.equal((await nouvelle(p3.j.session)).status, 403);
+
+  // Un appareil rangé AVANT ce changement (sans le champ « sur ») : de confiance, rien ne change pour lui.
+  const L = await appareil(-7);
+  assert.equal((await inscrire(env, L)).rep.status, 200);
+  const ancien = appareilRange(env, L.id); delete ancien.sur;
+  await env.PIECES_KV.put('appareil:' + L.id, JSON.stringify(ancien));
+  const cl = await connecter(env, L);
+  assert.equal(cl.rep.status, 200);
+  assert.equal((await nouvelle(cl.j.session)).status, 200);
+  const liste = (await (await appel(env, null, 'GET', '/auth/appareils', { origine: ORIGINE_770, cle: null, entetes: bearer(cl.j.session) })).json()).appareils;
+  assert.deepEqual(liste.map((ap) => ap.sur), [true]);
+  // Un défi d'avant ce changement (sans « sur ») : l'appareil n'est pas de confiance (dans le doute, non).
+  const env2 = envAuth(), M = await appareil(-7);
+  const opt = await (await appel(env2, null, 'POST', '/auth/options/inscription', { origine: ORIGINE_770, corps: {} })).json();
+  const k = 'defi:' + opt.challenge, d = JSON.parse(env2.PIECES_KV.objets.get(k).v); delete d.sur;
+  await env2.PIECES_KV.put(k, JSON.stringify(d));
+  const cred = await M.creer(opt, ORIGINE_770);
+  const r = await (await appel(env2, null, 'POST', '/auth/inscription', { origine: ORIGINE_770, cle: null, corps: cred })).json();
+  assert.equal(r.ok, true); assert.equal(r.appareil.sur, false);
 });
 
 // ——— Deux abonnements Claude ———

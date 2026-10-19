@@ -1461,11 +1461,15 @@ try {
   pb11 = await controler(E.p);
   await capture(E.p, 'sans-empreinte-768-dark.png');
   await E.p.click('[data-a="activer"]');
-  await etatDit(E.p, /^Empreinte activée sur cet appareil/);
+  // marie a déjà eu un appareil (plus haut) : celui-ci, ajouté avec la clé seule, n'est pas de confiance (une clé volée suffirait à
+  // l'ajouter). Il se connecte et envoie, mais ne met pas en ligne : le relais répond 403 « confiance », le bouton le dit.
+  await etatDit(E.p, /^Empreinte activée sur cet appareil : la prochaine fois, elle suffira pour envoyer\. Il a été ajouté avec la clé d’équipe seule/);
   n0 = (await ctl('appels')).length;
   await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
-  await etatDit(E.p, /^Mise en ligne lancée/);
-  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).length === 1, 'activée (une session fraîche) : « Mettre en ligne » part sans redemander l’empreinte');
+  await etatDit(E.p, /^Cet appareil a été ajouté avec la clé d’équipe seule : il ne peut pas mettre en ligne\./);
+  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).length === 0,
+    'activée avec la clé seule (marie avait déjà un appareil) : « Mettre en ligne » est refusé (403 « confiance »), sans empreinte de plus, rien ne part, on le dit');
+  await capture(E.p, 'pas-de-confiance-768-dark.png');
   // « Annuler » à la souris : garder le bouton appuyé.
   ok((await retourDe(R7, { etat: 'en_ligne', resume: 'En ligne.', annulation: { depot: '770lab/home', commits: ['fedcba987654'] } })).ok, 'retour « en ligne »');
   await actualiser(E.p, false);

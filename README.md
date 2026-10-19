@@ -51,12 +51,18 @@ l'option sans serveur — un compte Cloudflare gratuit.
 - Le texte d'un signalement est traité par la routine comme **des données, pas des ordres**.
 - Une page d'aucun projet est « à valider » : la routine **ouvre une PR sans la fusionner**. Le MODE direct (fusion par la
   routine, contrôles verts exigés) est un choix du propriétaire, projet par projet ; la mise en ligne d'une PR « à valider »
-  exige une empreinte de moins de 5 minutes, jamais la seule clé. Un projet peut être figé « à valider » (`MODE_FIGE`).
+  exige une empreinte de moins de 5 minutes d'un appareil de confiance, jamais la seule clé. Un projet peut être figé « à valider »
+  (`MODE_FIGE`).
 - La connexion par empreinte ne garde que des clés PUBLIQUES ; les sessions sont signées (HMAC, secret `SESSION_SECRET`),
   revérifiées à chaque usage (appareil retiré ou personne sortie de `CLES` : plus rien ne passe).
-- « Nouvelle clé » (pupitre) : une clé d'équipe neuve, contre une empreinte de moins de 5 minutes, jamais avec la seule clé ;
-  l'ancienne ne marche plus, le relais ne garde que l'empreinte de la nouvelle. La plus récente l'emporte : changer `CLES` au
-  Terminal ensuite annule la clé du pupitre (le secours quand une clé a fui).
+- Appareils de confiance : une clé d'équipe suffit à inscrire un appareil, donc une clé volée inscrit celui de l'intrus, avec SON
+  empreinte. Un appareil inscrit avec la clé seule alors que la personne en avait déjà un n'est pas de confiance : il ne crée pas
+  de clé et ne met pas en ligne (le premier appareil d'une personne, ceux inscrits avec l'empreinte d'un appareil de confiance et
+  ceux d'avant ce changement le sont).
+- « Nouvelle clé » (pupitre) : une clé d'équipe neuve, contre une empreinte de moins de 5 minutes d'un appareil de confiance,
+  jamais avec la seule clé ; l'ancienne ne marche plus, le relais ne garde que l'empreinte de la nouvelle. La plus récente
+  l'emporte : changer `CLES` au Terminal ensuite annule la clé du pupitre. Après une fuite : changer `CLES` au Terminal ET retirer
+  tout appareil inconnu dans « Mes appareils » (ou renommer la personne dans `CLES`) — voir INSTALL.md, étape 3.
 - Captures et notes sont servies sous des adresses aléatoires de 128 bits, effacées après 30 jours (Workers KV ; avec R2,
   prévoir une règle de suppression). Les demandes s’effacent 180 jours après leur dernière nouvelle (Workers KV).
 - Chaque demande a son propre jeton de retour, que seule la routine reçoit ; le relais n'en garde que l'empreinte. Une page ne

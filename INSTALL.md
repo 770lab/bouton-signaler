@@ -111,9 +111,24 @@ pour l'empreinte ne valent plus rien non plus). Une personne qui ne se connecte 
 Ne recopie pas les clés dans le dépôt ni dans ta réponse finale : donne-les au propriétaire une fois, dans la conversation.
 
 **Une nouvelle clé sans Terminal** (relais avec stockage et `SESSION_SECRET`) : dans le pupitre, carte « Mes appareils »,
-« Nouvelle clé » puis l'empreinte. Le relais (`POST /auth/cle/nouvelle`) exige une empreinte de moins de 5 minutes (une clé
-d'équipe seule ne suffit pas : une clé volée ne peut pas en créer une autre), tire une clé de 24 caractères, la rend UNE fois et
-n'en range que l'empreinte sous `cle:<nom>`, avec celle de la clé que `CLES` donnait alors à cette personne.
+« Nouvelle clé » puis l'empreinte d'un **appareil de confiance**. Le relais (`POST /auth/cle/nouvelle`) exige une empreinte de
+moins de 5 minutes posée sur un appareil de confiance, tire une clé de 24 caractères, la rend UNE fois et n'en range que
+l'empreinte sous `cle:<nom>`, avec celle de la clé que `CLES` donnait alors à cette personne.
+
+**Appareil de confiance.** Une clé d'équipe suffit à inscrire un appareil (« Ajouter cet appareil ») : quelqu'un qui a volé la
+clé peut donc inscrire LE SIEN et poser son propre doigt. Pour qu'il ne puisse ni créer une clé (l'ancienne cesserait de marcher
+partout) ni mettre en ligne, le relais distingue les appareils de confiance. Est de confiance un appareil inscrit :
+- avec la connexion par empreinte d'un appareil de confiance ;
+- ou avec la clé seule quand la personne n'avait encore jamais eu d'appareil (son premier ; retirer tous ses appareils ne rouvre
+  pas cette porte) ;
+- ou avant ce changement (rien ne change pour les appareils déjà inscrits : après la mise à jour du relais, regarder une fois
+  « Mes appareils » et retirer tout appareil inconnu, il compterait comme de confiance).
+
+Un appareil inscrit avec la clé seule alors que la personne en avait déjà un n'est pas de confiance : il se connecte, signale et
+suit ses demandes comme avant, mais « Nouvelle clé » et « Mettre en ligne » lui répondent `403` avec `confiance: true`. Le
+pupitre le marque « ajouté avec la clé seule » dans « Mes appareils ». Depuis un tel appareil (un ordinateur sans empreinte, par
+exemple), on choisit le téléphone quand l'empreinte est demandée (QR code) : c'est alors l'empreinte du téléphone qui compte.
+
 **Pour chaque personne, seule la clé la plus RÉCENTE vaut**, qu'elle vienne du pupitre ou du Terminal :
 - créée au pupitre : la clé de `CLES` ne marche plus ; une nouvelle création remplace la précédente ;
 - `CLES` changé ensuite au Terminal (une autre clé pour ce nom, par exemple parce qu'une clé a fui) : c'est la clé de `CLES` qui
@@ -123,6 +138,16 @@ Workers KV met jusqu'à une minute à le savoir partout. Retirer la personne de 
 remettre sous le même nom AVEC la même clé qu'au moment de la création rend la clé du pupitre valable de nouveau ; avec une autre
 clé, c'est celle-ci qui vaut). Pour annuler seulement la clé du pupitre et revenir à celle de `CLES` : effacer `cle:<nom>`
 (`npx wrangler@4 kv key delete --binding PIECES_KV --remote "cle:<nom>"`), ou changer `CLES` pour ce nom.
+
+**Après une fuite de clé** (clé collée au mauvais endroit, appareil perdu), dans cet ordre :
+1. changer `CLES` au Terminal pour cette personne (une nouvelle clé) : l'ancienne, et toute clé créée au pupitre, cessent de
+   marcher ;
+2. dans « Mes appareils », retirer TOUT appareil inconnu, en premier ceux marqués « ajouté avec la clé seule » : un appareil
+   inscrit avec la clé volée garde sa connexion tant qu'il n'est pas retiré (il ne crée pas de clé et ne met pas en ligne, mais il
+   signale, coupe le bouton et peut retirer des appareils) ;
+3. si la personne n'a plus aucun appareil de confiance (perdus, ou retirés par l'intrus), ou dans le doute : la renommer dans
+   `CLES` (`marie2:<nouvelle clé>` à la place de `marie:…`). Tous les appareils et connexions de l'ancien nom tombent, et son
+   premier appareil sous le nouveau nom est de confiance. « Mes demandes » de l'ancien nom n'apparaissent plus.
 
 ## 4. La routine Claude (sur le compte du propriétaire — c'est lui qui clique)
 
@@ -215,7 +240,8 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
 - **Annuler** : `POST /demandes/<réf>/annuler` (la sienne, `en_ligne` avec `annulation`, jamais `avinou` : `409`) → l'état
   `en_cours_annulation` et un travail ANNULER écrit par le relais (git revert des commits donnés, en ligne, RETOUR `annulee`).
   **Mettre en ligne** : `POST /demandes/<réf>/valider` (la sienne, `a_valider` avec une PR GitHub, jamais `avinou` : `409`) exige
-  une SESSION dont l'empreinte date de 5 minutes au plus (sinon `403` avec `empreinte: true` : la page refait l'empreinte) →
+  une SESSION dont l'empreinte date de 5 minutes au plus (sinon `403` avec `empreinte: true` : la page refait l'empreinte), d'un
+  appareil de confiance (sinon `403` avec `confiance: true`, étape 3) →
   `en_cours_validation` et un travail VALIDER (fusion, en ligne, RETOUR `en_ligne` avec `annulation`). Si la routine ne part pas,
   la demande garde son état (`en_ligne` / `a_valider`) avec la raison dans `erreur`, et la réponse est `502`.
 - **Deux abonnements** (`ROUTINE_URL` / `ROUTINE_JETON`, puis `ROUTINE_URL_2` / `ROUTINE_JETON_2`) : le relais prévient d'abord
@@ -230,12 +256,14 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   (dans `ORIGINES`), l'origine attendue est la sienne, exactement. `POST /auth/options/inscription {"nom"}` (clé ou session) puis
   `POST /auth/inscription` (le résultat de `navigator.credentials.create`, en JSON base64url, avec un `nom` facultatif qui
   remplace celui des options : la page sait seulement après la création si la clé vit sur un autre appareil, le téléphone par QR
-  code ou une clé USB) inscrivent l'appareil (20 par personne au plus) et rendent une session ; `POST` (ou `GET`) `/auth/options/connexion` puis `POST /auth/connexion` (le résultat
+  code ou une clé USB) inscrivent l'appareil (20 par personne au plus, `sur` : de confiance ou non, étape 3) et rendent une
+  session ; `POST` (ou `GET`) `/auth/options/connexion` puis `POST /auth/connexion` (le résultat
   de `navigator.credentials.get`) rendent `{ session, exp, qui, appareil }`. Les options sont à plat et sous `publicKey`.
   Une session dure 12 heures (`exp` en millisecondes) ; elle vaut la clé partout (`Authorization: Bearer <session>`) tant que
   l'appareil est inscrit et que la personne a une clé dans `CLES` (retirer quelqu'un de `CLES` retire aussi ses appareils).
   `GET /auth/appareils` et `POST /auth/appareils/<id>/retirer` (les siens seulement) gèrent « Mes appareils » ;
-  `POST /auth/verifier {"session"}` → `{ ok, valide, qui?, exp? }` sert à un autre serveur (l'API d'un Mac…). Défis : 5 minutes,
+  `POST /auth/verifier {"session"}` → `{ ok, valide, qui?, exp?, uv?, sur? }` sert à un autre serveur (l'API d'un Mac… : pour un
+  geste qui ne doit pas s'obtenir avec une clé volée, exiger `sur: true`). Défis : 5 minutes,
   une seule fois. Seules les clés PUBLIQUES sont rangées ; l'attestation n'est pas vérifiée (demandée « none »).
 
 **Mettre à jour une installation existante** — les trois morceaux, sinon rien ne change pour personne (le relais neuf avec

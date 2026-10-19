@@ -11,8 +11,9 @@
 //
 // Ce fichier porte aussi : la connexion par EMPREINTE (WebAuthn : CBOR, clés COSE, signatures, jeton de session signé HMAC),
 // le MODE de chaque projet (direct / à valider), les DEUX abonnements Claude (et le passage de l'un à l'autre), le journal de la
-// page et les éléments entourés recopiés dans le texte de la routine, les travaux ANNULER / VALIDER écrits par le relais, et les
-// clés d'équipe créées depuis le pupitre (« Nouvelle clé », avec l'empreinte).
+// page et les éléments entourés recopiés dans le texte de la routine, les travaux ANNULER / VALIDER écrits par le relais, les
+// clés d'équipe créées depuis le pupitre (« Nouvelle clé », avec l'empreinte) et les appareils DE CONFIANCE (une clé d'équipe
+// seule inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne).
 
 export const LIMITES = {
   texte: 4000,              // le texte écrit ou dicté
@@ -1096,8 +1097,25 @@ export async function verifierConnexion(o) {
 // Un appareil rangé est-il utilisable ? (Retiré : effacé, ou marqué « retire » quand le stockage ne sait pas effacer.)
 export const appareilValide = (ap, id) => !!(ap && typeof ap === 'object' && !ap.retire && ap.id === id && ap.qui && ap.rpId && ap.jwk
   && (ap.alg === -7 || ap.alg === -257));
-// Ce qu'une page voit d'un appareil (« Mes appareils »).
-export const appareilPublic = (ap, actuel) => ({ id: ap.id, nom: ap.nom, rpId: ap.rpId, creeLe: ap.creeLe, vuLe: ap.vuLe || null, actuel: !!actuel && ap.id === actuel });
+// LES APPAREILS DE CONFIANCE (champ « sur » de l'appareil rangé). Quiconque a la clé d'équipe (volée, collée au mauvais endroit)
+// peut inscrire SON appareil (une vraie clé d'accès sur son téléphone, ou un appareil logiciel : l'attestation « none » ne dit pas
+// ce qu'il est, et c'est lui qui pose le drapeau UV) et reçoit aussitôt une session à empreinte fraîche. Cette session ne doit pas
+// suffire à créer une nouvelle clé d'équipe (POST /auth/cle/nouvelle : l'ancienne cesserait de marcher, le propriétaire serait
+// enfermé dehors, et le Terminal ne le sauverait pas : l'intrus, toujours inscrit, recréerait une clé) ni à mettre en ligne
+// (POST /demandes/<réf>/valider). Ces deux gestes exigent un appareil DE CONFIANCE, c'est-à-dire inscrit :
+//   - avec la session d'un appareil de confiance ;
+//   - ou avec la clé seule quand la personne n'avait encore JAMAIS eu d'appareil (sa liste « appareils:<nom> » n'existe pas encore ;
+//     retirer tous ses appareils ne rouvre pas cette porte : la liste reste, vide) ;
+//   - ou avant ce changement (rangé sans le champ « sur ») : rien ne change pour les appareils déjà inscrits.
+// Sinon (la clé seule, alors que la personne a déjà eu un appareil) : sur = false. Cet appareil se connecte, signale, lit et
+// renvoie ses demandes comme avant ; « Nouvelle clé » et « Mettre en ligne » lui répondent 403 { confiance: true }.
+export const appareilDeConfiance = (ap) => !!ap && typeof ap === 'object' && ap.sur !== false;
+// Le nouvel appareil sera-t-il de confiance ? o : { appareil (celui de la session qui demande les options ; null = la clé seule),
+// jamaisInscrit (la personne n'a jamais eu d'appareil) }. Décidé aux options d'inscription, rangé dans le défi, puis dans l'appareil.
+export const inscriptionDeConfiance = (o) => (o && o.appareil ? appareilDeConfiance(o.appareil) : !!(o && o.jamaisInscrit === true));
+// Ce qu'une page voit d'un appareil (« Mes appareils ») ; « sur » : de confiance (le pupitre marque les autres).
+export const appareilPublic = (ap, actuel) => ({ id: ap.id, nom: ap.nom, rpId: ap.rpId, creeLe: ap.creeLe, vuLe: ap.vuLe || null, actuel: !!actuel && ap.id === actuel,
+  sur: appareilDeConfiance(ap) });
 // Le nom donné à un appareil à son inscription (« iPhone de Marie »), 60 caractères au plus.
 export const nomAppareil = (x) => propre(typeof x === 'string' ? x.replace(/\s+/g, ' ') : '', 60) || 'Appareil';
 // Le nom rangé à l'inscription : celui envoyé avec la clé d'accès créée (POST /auth/inscription { …, nom }), s'il y en a un, sinon
@@ -1152,7 +1170,8 @@ export function nomsDesCles(liste) {
 }
 
 // ——— LES CLÉS D'ÉQUIPE CRÉÉES DEPUIS LE PUPITRE (POST /auth/cle/nouvelle) ———
-// Le propriétaire touche « Nouvelle clé » et pose le doigt : le relais tire une clé neuve et ne range que son EMPREINTE (sha256)
+// Le propriétaire touche « Nouvelle clé » et pose le doigt d'un appareil DE CONFIANCE (voir appareilDeConfiance : un appareil
+// inscrit avec la clé seule ne le peut pas) : le relais tire une clé neuve et ne range que son EMPREINTE (sha256)
 // sous « cle:<nom> » : { h, creeLe, envRevoque, app }. `envRevoque` = l'empreinte de la clé que CLES lui donnait à cet instant
 // (de chacune, s'il en a plusieurs ; null s'il n'en a pas). Une 2e création remplace la 1re.
 // LA CLÉ LA PLUS RÉCENTE EST LA SEULE VALABLE, qu'elle vienne du pupitre ou du Terminal (le Terminal est le secours quand une clé a

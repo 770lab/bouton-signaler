@@ -29,7 +29,8 @@
  *  Chaque carte : l'état, le projet, l'abonnement Claude qui l'a prise (« via abonnement 1 »), le résumé, les captures avant / après
  *  (un toucher les montre en plein écran), et ce que le relais permet (champ « actions ») : « Annuler » une modification en ligne
  *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (exige une empreinte de moins de 5 minutes : sinon le bouton
- *  la redemande d'abord ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
+ *  la redemande d'abord ; posée sur un appareil de confiance : un appareil ajouté avec la clé d'équipe seule ne met pas en ligne, le
+ *  bouton le dit ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
  *  pas partie ou sans nouvelle depuis 15 minutes (et « Renvoyer sur l’autre abonnement »).
  *
  *  LA CONNEXION. Par EMPREINTE (WebAuthn, clés d'accès, rpId = le nom d'hôte de la page) : POST /auth/options/connexion puis
@@ -91,6 +92,8 @@
     origineEnvoi: 'Cette page n’est pas autorisée par le relais (son adresse n’est pas dans sa liste, ORIGINES) : l’envoi sera refusé.',
     pasReglee: 'La connexion par empreinte n’est pas encore réglée sur le relais : utilise ta clé d’équipe.',
     sessionPerdue: 'Ta connexion a expiré (ou cet appareil a été retiré) : reconnecte-toi avec ton empreinte.',
+    // 403 « confiance » du relais : l'appareil de la session a été ajouté avec la clé seule (une clé volée suffit pour cela).
+    confiance: 'Cet appareil a été ajouté avec la clé d’équipe seule : il ne peut pas mettre en ligne. Mets en ligne depuis ton téléphone, ou ici après « Se déconnecter » puis « Se connecter avec l’empreinte » en choisissant ton téléphone.',
     muet: 'Le relais ne répond pas : vérifie la connexion, puis réessaie.',
   };
 
@@ -1483,8 +1486,12 @@
       if (!fond) return;
       if (!r.ok) { el.disabled = false; dire(fond.querySelector('.sgn-etat'), r.msg, 'ko'); return; }
       EMP.offre = false;
-      rendre('Empreinte activée sur cet appareil : la prochaine fois, elle suffira.', 'ok');
-      if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre('Empreinte activée sur cet appareil : la prochaine fois, elle suffira.', 'ok'); });
+      // Ajouté avec la clé seule alors que la personne a déjà un appareil (« sur: false ») : il envoie, mais ne met pas en ligne.
+      var dit = r.appareil && r.appareil.sur === false
+        ? 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira pour envoyer. Il a été ajouté avec la clé d’équipe seule : pour mettre en ligne, l’empreinte de ton téléphone.'
+        : 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira.';
+      rendre(dit, 'ok');
+      if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(dit, 'ok'); });
     });
   }
 
@@ -1497,7 +1504,8 @@
     var a = String(x.abonnement || ''), autre = a === '1' ? '2' : a === '2' ? '1' : '';
     return autre && R.abonnements && R.abonnements.some(function (b) { return b.id === autre && b.regle; }) ? autre : '';
   }
-  // POST /demandes/<réf>/<quoi>. Rend [message, ton], ou { empreinte: true } (le relais veut une empreinte fraîche).
+  // POST /demandes/<réf>/<quoi>. Rend [message, ton], ou { empreinte: true } (le relais veut une empreinte fraîche). 403
+  // « confiance » : reposer le doigt sur CET appareil n'y changerait rien (il a été ajouté avec la clé seule), on le dit.
   function agir(quoi, id, el, corps, m) {
     el.disabled = true;
     if (m.enCours) el.textContent = m.enCours;
@@ -1505,6 +1513,7 @@
       if (j.demande && typeof j.demande === 'object' && D.liste) { var d = j.demande; D.liste = D.liste.map(function (x) { return x.id === d.id ? d : x; }); }
       if (j.ok && j.demande && typeof j.demande === 'object') return m.ok(j.demande);
       if (j.coupe) { couper(); return [COUPE_MSG, 'ko']; }
+      if (j.statut === 403 && j.confiance) return [MSG.confiance, 'ko'];
       if (j.statut === 403 && j.empreinte) return { empreinte: true };
       if (j.sessionPerdue) return [MSG.sessionPerdue, 'ko'];
       if (j.statut === 401 || j.cle) return ['', ''];   // la lecture qui suit le dira et redemandera la clé
