@@ -30,8 +30,8 @@
  *  refuse CETTE page (adresse absente de ses ORIGINES, ou relais pas encore à jour) ; GET /etat, public, peut le dire lui-même.
  *  Chaque carte : l'état, le projet, l'abonnement Claude qui l'a prise (« via abonnement 1 »), le résumé, les captures avant / après
  *  (un toucher les montre en plein écran), et ce que le relais permet (champ « actions ») : « Annuler » une modification en ligne
- *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (exige une empreinte de moins de 5 minutes : sinon le bouton
- *  la redemande d'abord ; posée sur un appareil de confiance : un appareil ajouté avec la clé d'équipe seule ne met pas en ligne, le
+ *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (exige d’être connecté par l’empreinte : sinon le bouton
+ *  la demande d’abord ; sur un appareil de confiance : un appareil ajouté avec la clé d'équipe seule ne met pas en ligne, le
  *  bouton le dit ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
  *  pas partie ou sans nouvelle depuis 15 minutes (et « Renvoyer sur l’autre abonnement »).
  *
@@ -81,10 +81,10 @@
   var APPUI_LONG_MS = 380, MARGE = 12, MARGE_HAUT = 16, POSITIONS_MAX = 40;          // le rond qu'on déplace
   var ROUGE = '#ff2b2b', EPAISSEUR_PX = 4, TRAITS_MAX = 30, POINTS_MAX = 500, ELEMENTS_MAX = 10, ELEMENTS_GRILLE = 400;
   var BOITE_MS = 30000, BOITE_MAX = 200, ALERTES_MAX = 5;
-  // La connexion par empreinte : la session (et l'empreinte proposée une fois) ; « fraîche » = empreinte de moins de 5 minutes
-  // (30 s de marge : le relais juge avec SA montre) ; un défi demandé d'avance sert 4 minutes (le relais le garde 5).
+  // La connexion par empreinte : la session (et l’empreinte proposée une fois) ; un défi demandé d’avance sert 4 minutes
+  // (le relais le garde 5).
   var SESSION_CLE = 'signaler_session_v1', PROPOSEE_CLE = 'signaler_empreinte_proposee_v1';
-  var FRAICHE_MS = 5 * 60000 - 30000, DEFI_GARDE_MS = 4 * 60000, TENIR_MS = 1200, ROUTINE_GARDE_MS = 2 * 60000;
+  var DEFI_GARDE_MS = 4 * 60000, TENIR_MS = 1200, ROUTINE_GARDE_MS = 2 * 60000;
   var COUPE_MSG = 'Le bouton est coupé depuis le pupitre.';
   var MAX_MSG = ECRANS_MAX + ' écrans au plus : retire-en un pour en ajouter un autre.';
   // Pourquoi le relais ne répond pas : le navigateur ne lit pas une réponse sans CORS, il faut le dire en clair à la personne.
@@ -611,7 +611,6 @@
   function garderSession(j) { ecrire(SESSION_CLE, JSON.stringify({ session: String(j.session), exp: Number(j.exp) || 0, qui: court(j.qui, 60) })); }
   function oublierSession() { ecrire(SESSION_CLE, ''); }
   function aAcces() { return !!(sessionGardee() || lire(CLE_STOCKAGE)); }
-  function fraiche(s) { var t = Date.now(); return !!(s && s.uv && t - s.uv <= FRAICHE_MS && s.uv <= t + 60000); }
   // Un appel « en mon nom » : la session s'il y en a une (Authorization: Bearer), sinon la clé d'équipe. Session refusée (401) :
   // oubliée, et la clé prend le relais s'il y en a une (réponse marquée parCle) ; sans clé, la réponse est marquée sessionPerdue.
   function appelAcces(chemin, o) {
@@ -1602,8 +1601,8 @@
     agir('annuler', id, el, {}, { enCours: 'Annulation…', echec: 'Annulation pas partie : ',
       ok: function () { return ['Annulation lancée : Claude retire le changement, puis vérifie le site. Le résultat arrivera ici.', 'ok']; } }).then(apresAction);
   }
-  // « Mettre en ligne » une modification à valider : il faut une empreinte de moins de 5 minutes. Session absente ou trop vieille :
-  // l'empreinte d'abord ; le relais la juge encore trop vieille (sa montre) : une fois de plus, puis on s'arrête.
+  // « Mettre en ligne » une modification à valider : être connecté par l’empreinte suffit (pas de seconde empreinte). Sans session :
+  // l’empreinte d’abord ; le relais la refuse encore : une fois de plus, puis on s’arrête.
   function mettreEnLigne(id, el) {
     if (!id) return;
     var pose = false;
@@ -1617,7 +1616,7 @@
     }
     function lancer(forcer) {
       var s = sessionGardee();
-      return (s && !forcer && fraiche(s) ? Promise.resolve({ ok: true }) : empreinte()).then(function (r) {
+      return (s && !forcer ? Promise.resolve({ ok: true }) : empreinte()).then(function (r) {
         if (!r.ok) {
           // Pas d'empreinte pour ce site sur cet appareil, mais une clé : proposer de l'activer, ici même.
           if (r.absente && lire(CLE_STOCKAGE) && !sessionGardee() && EMP.reglee !== false) EMP.offre = true;
@@ -1923,8 +1922,8 @@
       etat.appendChild(document.createTextNode(' ')); etat.appendChild(b);
     }
     [].forEach.call(fond.querySelectorAll('[data-tenir]'), brancherTenir);
-    // Le défi de l'empreinte demandé d'avance : pour « Se connecter avec l’empreinte », ou « Mettre en ligne » sans empreinte fraîche.
-    if (fond.querySelector('.sgn-acces [data-a="empreinte"]') || (fond.querySelector('[data-a="valider"]') && !fraiche(sessionGardee()))) prechargerDefi();
+    // Le défi de l’empreinte demandé d’avance : pour « Se connecter avec l’empreinte », ou « Mettre en ligne » sans être connecté.
+    if (fond.querySelector('.sgn-acces [data-a="empreinte"]') || (fond.querySelector('[data-a="valider"]') && !sessionGardee())) prechargerDefi();
     if (fond.querySelector('.sgn-offre')) prechargerInscription();
     if (vue === 'signaler') {
       brancherDessin();

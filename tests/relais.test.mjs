@@ -1503,7 +1503,7 @@ test('POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l’
   assert.equal(C.apresEnvoi(C.regler({ id: a.ref, etat: 'en_ligne' }, 5), { ok: false }, { quand: 9, garder: true }).regleeLeMs, 5, 'pas repartie : marque gardée');
 });
 
-test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
+test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forcément fraîche), à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7);
   const { j: ins } = await inscrire(env, A);
   await appel(env, null, 'POST', '/etat', { corps: { projet: 'home', mode: 'valider' } });
@@ -1514,18 +1514,17 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
     images: { avant: PNG_1x1, apres: PNG_B } });
   const pub = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === a.ref);
   assert.deepEqual(pub.actions, ['valider']);
-  // La clé seule ne suffit pas ; une session de plus de 5 minutes non plus (403, pas 401 : la page garde sa session).
+  // La clé seule ne suffit pas (403, pas 401 : la page propose la connexion par empreinte).
   let rep = await appel(env, R, 'POST', chemin);
-  assert.equal(rep.status, 403); assert.equal((await rep.json()).empreinte, true);
-  const vieille = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now(), uv: Date.now() - 6 * 60 * 1000 }), SECRET);
-  rep = await appel(env, R, 'POST', chemin, { cle: null, entetes: bearer(vieille) });
   assert.equal(rep.status, 403); assert.equal((await rep.json()).empreinte, true);
   assert.equal(R.appels.length, 1);
   rep = await appel(env, R, 'POST', chemin, { cle: CLE_PAUL, entetes: {} });
   assert.equal(rep.status, 404, 'paul : pas la sienne');
 
+  // Connecté par l'empreinte suffit, même il y a plus de 5 minutes : pas de seconde empreinte (choix du propriétaire, 2026-10-21).
   const c = await connecter(env, A);
-  rep = await appel(env, R, 'POST', chemin, { cle: null, entetes: bearer(c.j.session) });
+  const vieille = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now(), uv: Date.now() - 6 * 60 * 1000 }), SECRET);
+  rep = await appel(env, R, 'POST', chemin, { cle: null, entetes: bearer(vieille) });
   const j = await rep.json();
   assert.equal(rep.status, 200, JSON.stringify(j)); assert.equal(j.demande.etat, 'en_cours_validation');
   const t = R.appels[1].corps.text;

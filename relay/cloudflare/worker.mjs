@@ -21,7 +21,7 @@
 //
 // Routes : POST /signaler · GET /piece/<id> (une capture, la note, une capture avant / après, sous une adresse de 128 bits)
 //          GET /demandes (les miennes) · POST /demandes/<réf>/renvoyer (pas partie, ou sans nouvelle depuis 15 min ; { abonnement })
-//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; empreinte de moins de 5 min, d'un
+//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; connecté par l'empreinte, d'un
 //          appareil de confiance) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, ses captures, de quoi annuler, avec son jeton)
 //          GET /etat[?projet=<id>] · POST /etat (interrupteurs et mode de chaque projet) · GET / POST /routine (les abonnements)
@@ -349,8 +349,8 @@ export async function annuler(req, env, outils, id) {
 }
 
 // POST /demandes/<réf>/valider : une demande « à valider » (avec sa PR) → travail VALIDER (fusion, en ligne, RETOUR « en_ligne »).
-// Exige une SESSION dont l'empreinte date de 5 minutes au plus (la clé d'équipe ne suffit pas : 403 « empreinte: true », la page
-// redemande l'empreinte), d'un appareil DE CONFIANCE (sinon 403 « confiance: true » : une clé volée inscrit un appareil, et
+// Exige une SESSION de connexion par empreinte (12 h ; plus de seconde empreinte de moins de 5 minutes, choix du propriétaire le
+// 2026-10-21 ; la clé d'équipe seule ne suffit pas : 403 « empreinte: true », la page propose la connexion), d'un appareil DE CONFIANCE (sinon 403 « confiance: true » : une clé volée inscrit un appareil, et
 // l'empreinte de cet appareil ne doit pas mettre en ligne). Jamais pour Avinou Malkenou : 409.
 export async function valider(req, env, outils, id) {
   const m = await maDemande(req, env, id);
@@ -360,8 +360,7 @@ export async function valider(req, env, outils, id) {
   if (d.etat !== 'a_valider') return json({ ok: false, erreur: 'rien à mettre en ligne : cette demande n’est pas « à valider »', demande: publique(env, d) }, 409, cors);
   if (!C.prsDe(d.liens).length) return json({ ok: false, erreur: 'aucune PR à mettre en ligne dans cette demande', demande: publique(env, d) }, 409, cors);
   if (a.session && !C.appareilDeConfiance(a.appareil)) return json(PAS_DE_CONFIANCE_VALIDER, 403, cors);
-  if (!a.session || !C.sessionFraiche(a.session, Date.now()))
-    return json({ ok: false, empreinte: true, erreur: 'pose ton empreinte pour mettre en ligne (elle vaut 5 minutes)' }, 403, cors);
+  if (!a.session) return json({ ok: false, empreinte: true, erreur: 'connecte-toi avec ton empreinte pour mettre en ligne' }, 403, cors);
   if (!C.boutonActif(await etatDuBouton(st), projet)) return json(COUPE, 403, cors);
   return lancerTravail(req, env, outils, m, 'valider');
 }
