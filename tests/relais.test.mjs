@@ -1473,6 +1473,36 @@ test('POST /demandes/<réf>/annuler : en ligne avec de quoi annuler, la sienne, 
   assert.equal((await retourDe(env2, { id: ref2, cle: jeton2, etat: 'en_ligne' })).status, 200);
 });
 
+test('POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l’Atelier, gardée par le relais ; la sienne seulement ; rien ne part chez Claude', async () => {
+  const env = envKv(), R = routine();
+  const a = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
+  const chemin = '/demandes/' + a.ref + '/regler', n = R.appels.length;
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: CLE_PAUL })).status, 404, 'la demande d’un autre');
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: null })).status, 401);
+  assert.equal((await appel(env, R, 'POST', chemin, { origine: 'https://pirate.fr' })).status, 403);
+  assert.equal((await appel(env, R, 'POST', '/demandes/' + '0'.repeat(12) + '/regler')).status, 404);
+  await appel(env, null, 'POST', '/etat', { corps: { actif: false } });
+  let rep = await appel(env, R, 'POST', chemin);
+  const j = await rep.json();
+  assert.equal(rep.status, 200, 'même bouton coupé : ce n’est qu’une marque'); assert.equal(j.ok, true);
+  await appel(env, null, 'POST', '/etat', { corps: { actif: true } });
+  assert.equal(R.appels.length, n, 'la routine n’est pas appelée');
+  assert.equal(j.demande.etat, 'envoyee', 'l’état de Claude ne change pas');
+  assert.ok(Number(j.demande.regleeLeMs) > 0);
+  assert.equal(lireDemande(env, a.ref).regleeLeMs, j.demande.regleeLeMs);
+  const liste = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes;
+  assert.equal(liste.find((x) => x.id === a.ref).regleeLeMs, j.demande.regleeLeMs, 'sur tous les appareils (GET /demandes)');
+  // Un retour de la routine garde la marque ; « Rouvrir » l'enlève.
+  assert.equal((await retourDe(env, { id: a.ref, cle: jetonDe(R.appels[n - 1].corps.text), etat: 'question', resume: 'Laquelle ?' })).status, 200);
+  assert.equal(lireDemande(env, a.ref).regleeLeMs, j.demande.regleeLeMs);
+  rep = await appel(env, R, 'POST', '/demandes/' + a.ref + '/rouvrir');
+  assert.equal(rep.status, 200); assert.equal('regleeLeMs' in (await rep.json()).demande, false);
+  assert.equal('regleeLeMs' in lireDemande(env, a.ref), false);
+  // Une demande qui repart chez Claude n'est plus réglée (apresEnvoi).
+  assert.equal('regleeLeMs' in C.apresEnvoi(C.regler({ id: a.ref, etat: 'pas_partie' }, 5), { ok: true }, { quand: 9 }), false);
+  assert.equal(C.apresEnvoi(C.regler({ id: a.ref, etat: 'en_ligne' }, 5), { ok: false }, { quand: 9, garder: true }).regleeLeMs, 5, 'pas repartie : marque gardée');
+});
+
 test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7);
   const { j: ins } = await inscrire(env, A);

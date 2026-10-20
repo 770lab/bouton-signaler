@@ -599,6 +599,38 @@ try {
   ok(m.erreursPage.length === 0, 'aucune erreur JavaScript');
   await m.ctx.close();
 
+  console.log('5 bis. Les conversations de l’Atelier : une réponse continue sa conversation, « Réglé » n’est plus à traiter');
+  remettre();
+  {
+    const d = (min, x) => Object.assign({ qui: 'marie', type: 'bug', captures: 0, audio: false, creeLeMs: T0 - min * 60000, majLeMs: T0 - min * 60000 + 30000,
+      page: { url: 'https://770lab.com/home/', titre: 'Home' } }, x);
+    const suite = (ref, t) => 'SUITE DE LA DEMANDE ' + ref + ' (…) — projet Home\n\n' + t;
+    faux.base.marie = [
+      d(10, { id: 'c0c0c0c0c0c2', etat: 'question', texte: suite('c0c0c0c0c0c1', 'finalement non') }),            // rouverte : compte
+      d(60, { id: 'b0b0b0b0b0b1', etat: 'a_relire', texte: 'La PR à relire, rangée dans Réglé', regleeLeMs: T0 - 50 * 60000 }),  // réglée : ne compte pas
+      d(90, { id: 'a0a0a0a0a0a2', etat: 'question', texte: suite('a0a0a0a0a0a1', 'je veux un bouton') }),         // la dernière réponse : compte
+      d(120, { id: 'd0d0d0d0d0d1', etat: 'pas_partie', texte: 'Pas partie' }),                                     // compte
+      d(180, { id: 'a0a0a0a0a0a1', etat: 'question', texte: 'Pourquoi ça marche pas ?' }),                        // continuée : ne compte pas
+      d(300, { id: 'c0c0c0c0c0c1', etat: 'question', texte: 'Une autre', regleeLeMs: T0 - 200 * 60000 }),         // continuée après « Réglé »
+    ];
+    const c = await page({ width: 412, height: 915 }, { cle: CLE });
+    const b5 = await c.p.waitForSelector('.sgn-badge', { state: 'visible', timeout: 5000 });
+    ok((await b5.textContent()) === '3', 'le rond compte 3 : la dernière réponse de chaque conversation, sans celle rangée dans « Réglé » (' + (await b5.textContent()) + ')');
+    await b5.click();
+    await c.p.waitForSelector('.sgn-carte');
+    const ids = await c.p.$$eval('.sgn-carte', (l) => l.map((x) => x.dataset.id));
+    ok(ids.join() === 'c0c0c0c0c0c2,a0a0a0a0a0a2,d0d0d0d0d0d1', '« À traiter » : ' + ids.join());
+    await c.p.click('[data-a="filtre"][data-v="toutes"]');
+    ok((await texte(c.p, '.sgn-carte[data-id="b0b0b0b0b0b1"] .sgn-pil')) === 'réglé', 'une conversation rangée dans « Réglé » le dit');
+    ok((await texte(c.p, '.sgn-carte[data-id="a0a0a0a0a0a1"] .sgn-pil')) === 'question', 'une demande continuée garde son état (elle n’est juste plus à traiter)');
+    const det = await c.p.evaluate(() => new Promise((ok) => { addEventListener('signaler:demandes', (e) => ok(e.detail), { once: true }); window.Signaler.demandes('toutes'); }));
+    ok(det.aTraiter === 3 && det.projets.home.aTraiter === 3, 'le pupitre reçoit les mêmes nombres (signaler:demandes)');
+    const pb5 = await controler(c.p);
+    ok(!pb5.length, 'mise en page à 412 px' + (pb5.length ? ' : ' + pb5.join(' ; ') : ''));
+    ok(c.erreursPage.length === 0, 'aucune erreur JavaScript');
+    await c.ctx.close();
+  }
+
   console.log('6. Sans clé, liste vide, erreurs en clair');
   remettre();
   const s = await page({ width: 390, height: 844 });

@@ -22,7 +22,7 @@
 // Routes : POST /signaler · GET /piece/<id> (une capture, la note, une capture avant / après, sous une adresse de 128 bits)
 //          GET /demandes (les miennes) · POST /demandes/<réf>/renvoyer (pas partie, ou sans nouvelle depuis 15 min ; { abonnement })
 //          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; empreinte de moins de 5 min, d'un
-//          appareil de confiance)
+//          appareil de confiance) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, ses captures, de quoi annuler, avec son jeton)
 //          GET /etat[?projet=<id>] · POST /etat (interrupteurs et mode de chaque projet) · GET / POST /routine (les abonnements)
 //          /auth/… (la connexion par empreinte : options/inscription, inscription, options/connexion, connexion, appareils,
@@ -35,7 +35,7 @@
 import * as C from '../coeur.mjs';
 
 const PIECE_RX = /^\/piece\/([0-9a-f]{32})$/;
-const DEMANDE_RX = /^\/demandes\/([0-9a-f]{12})\/(renvoyer|annuler|valider)$/;
+const DEMANDE_RX = /^\/demandes\/([0-9a-f]{12})\/(renvoyer|annuler|valider|regler|rouvrir)$/;
 const RETIRER_RX = /^\/auth\/appareils\/([A-Za-z0-9_-]{16,400})\/retirer$/;
 const KV_DUREE_S = 30 * 24 * 3600;
 const SANS_STOCKAGE = 'le relais n’a pas de stockage';
@@ -366,6 +366,20 @@ export async function valider(req, env, outils, id) {
   return lancerTravail(req, env, outils, m, 'valider');
 }
 
+// POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l'Atelier (regleeLeMs), gardée par le relais pour que la
+// personne la retrouve sur tous ses appareils. Ni routine, ni interrupteur : rien ne part chez Claude.
+async function marquer(req, env, id, quoi) {
+  const m = await maDemande(req, env, id);
+  if (m.refus) return m.refus;
+  const { a, st, d, cors } = m;
+  const x = quoi === 'regler' ? C.regler(d, Date.now()) : C.rouvrir(d);
+  await ecrireDemande(st, x);
+  console.log('[' + quoi + ']', JSON.stringify({ ref: id, qui: a.qui }));
+  return json({ ok: true, demande: publique(env, x) }, 200, cors);
+}
+export const regler = (req, env, outils, id) => marquer(req, env, id, 'regler');
+export const rouvrir = (req, env, outils, id) => marquer(req, env, id, 'rouvrir');
+
 // POST /retour : la routine renvoie l'état de la demande (de serveur à serveur : ni origine exigée, ni CORS). Le jeton est comparé
 // par son empreinte, en temps constant ; une réf. inconnue et un mauvais jeton reçoivent EXACTEMENT la même réponse. Les captures
 // avant / après ne sont rangées qu'APRÈS cette vérification (180 jours, comme la demande) et servies sous /piece/<id>.
@@ -660,7 +674,7 @@ export async function routeur(req, env, outils) {
     if (m === 'POST' && p === '/signaler') return await signaler(req, env, outils);
     if (m === 'GET' && p === '/demandes') return await demandes(req, env);
     const r = DEMANDE_RX.exec(p);
-    if (m === 'POST' && r) return await ({ renvoyer: renvoyer, annuler: annuler, valider: valider })[r[2]](req, env, outils, r[1]);
+    if (m === 'POST' && r) return await ({ renvoyer: renvoyer, annuler: annuler, valider: valider, regler: regler, rouvrir: rouvrir })[r[2]](req, env, outils, r[1]);
     if (m === 'POST' && p === '/retour') return await retour(req, env);
     if (m === 'GET' && p === '/etat') return await etat(req, env);
     if (m === 'POST' && p === '/etat') return await changerEtat(req, env);

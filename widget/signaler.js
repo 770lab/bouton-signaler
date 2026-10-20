@@ -495,7 +495,7 @@
     + '.sgn-vis-i{position:relative;flex:1 1 auto;min-height:0;margin:10px 0 8px}'
     + '.sgn-vis-i img{position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%;border-radius:8px}'
     + '.sgn-vis-l{flex:0 0 auto;margin:0;text-align:center;color:#cbd5e1;font-size:14px}'
-    + '.e-envoyee{--e:#2563eb}.e-pas_partie{--e:#dc2626}.e-a_relire{--e:#b45309}.e-question{--e:#7c3aed}.e-rien{--e:#64748b}.e-echec{--e:#991b1b}.e-en_ligne{--e:#15803d}'
+    + '.e-envoyee{--e:#2563eb}.e-pas_partie{--e:#dc2626}.e-a_relire{--e:#b45309}.e-question{--e:#7c3aed}.e-rien{--e:#64748b}.e-echec{--e:#991b1b}.e-en_ligne,.e-reglee{--e:#15803d}'
     + '.e-a_valider{--e:#c2410c}.e-annulee{--e:#475569}.e-en_cours_annulation,.e-en_cours_validation{--e:#4f46e5}';
   var style = document.createElement('style'); style.textContent = css; (document.head || document.documentElement).appendChild(style);
 
@@ -1372,7 +1372,7 @@
   var EN_COURS = { envoyee: 1, en_cours_annulation: 1, en_cours_validation: 1 };   // une session Claude y travaille
   var FILTRES = [
     { id: 'toutes', lib: 'Toutes', garde: function () { return true; }, vide: 'Aucune demande pour l’instant.' },
-    { id: 'traiter', lib: 'À traiter', garde: function (x) { return !!A_TRAITER[x.etat]; }, vide: 'Rien à traiter pour l’instant.' },
+    { id: 'traiter', lib: 'À traiter', garde: function (x) { return !!A_TRAITER[x.etat] && !horsConversation(x); }, vide: 'Rien à traiter pour l’instant.' },
     { id: 'cours', lib: 'En cours', garde: function (x) { return !!EN_COURS[x.etat]; }, vide: 'Rien en cours pour l’instant.' },
   ];
   var NOMS_FILTRE = { toutes: 'toutes', tout: 'toutes', traiter: 'traiter', a_traiter: 'traiter', 'à traiter': 'traiter', cours: 'cours', en_cours: 'cours', 'en cours': 'cours' };
@@ -1382,6 +1382,36 @@
   var vue = 'signaler', vueRendue = '', depuisSignaler = false, rendus = 0, numeroLecture = 0;
   // Les abonnements Claude (GET /routine), lus seulement quand une carte pourrait proposer « Renvoyer sur l’autre abonnement ».
   var R = { abonnements: null, luA: 0, enRoute: null };
+
+  // Les conversations de l'Atelier 770LAB (mêmes règles que atelier/regles.js de 770lab.github.io) : une réponse envoyée de
+  // l'Atelier est une demande dont le texte commence par « SUITE DE LA DEMANDE <réf> » ; elle continue la conversation de <réf>,
+  // et seule la DERNIÈRE réponse d'une conversation peut être à traiter. Une conversation rangée dans « Réglé » (regleeLeMs de
+  // sa demande d'origine, gardé par le relais) n'est plus à traiter, jusqu'à une réponse envoyée après.
+  var SUITE_RX = /^\s*SUITE DE LA DEMANDE ([0-9a-f]{12})\b/;
+  var CONV = { liste: null, hors: {}, reglee: {} };
+  function conversations() {
+    if (CONV.liste === D.liste) return CONV;
+    var l = (D.liste || []).filter(function (x) { return x && x.id; }), par = {}, racine = {}, dernier = {}, hors = {}, reglee = {};
+    l.forEach(function (x) { par[x.id] = x; });
+    var racineDe = function (x) {
+      var r = x, n = 0, m;
+      while ((m = SUITE_RX.exec(String(r.texte || ''))) && par[m[1]] && par[m[1]] !== r && n++ < 20) r = par[m[1]];
+      return r;
+    };
+    l.forEach(function (x) {
+      var r = racineDe(x), d = dernier[r.id]; racine[x.id] = r;
+      if (!d || (x !== r && Number(x.creeLeMs || 0) >= Number(d.creeLeMs || 0))) dernier[r.id] = x;
+    });
+    l.forEach(function (x) {
+      var r = racine[x.id], m = Number(r.regleeLeMs) || 0;
+      if (dernier[r.id] !== x) hors[x.id] = 1;
+      else if (m && m >= Number(x.creeLeMs || 0)) { hors[x.id] = 1; reglee[x.id] = 1; }
+    });
+    CONV = { liste: D.liste, hors: hors, reglee: reglee };
+    return CONV;
+  }
+  function horsConversation(x) { return !!(x && conversations().hors[x.id]); }
+  function regleeIci(x) { return !!(x && conversations().reglee[x.id]); }
 
   // Le nombre du rond compte TOUTES les demandes à traiter ; la liste, celles du projet choisi s'il y en a un.
   function compteATraiter() { return D.liste ? D.liste.filter(FILTRES[1].garde).length : 0; }
@@ -1716,7 +1746,7 @@
   // rangées (3 boutons au plus chacune) : ce qu'on peut FAIRE (mettre en ligne, annuler, renvoyer), puis les liens.
   var estPr = function (l) { return /\/(pull|merge_requests)\/\d+/.test(l); };
   function carte(x) {
-    var e = ETATS[x.etat] ? x.etat : 'inconnu', projet = projetDe(x), id = h(x.id);
+    var reglee = regleeIci(x), e = reglee ? 'reglee' : ETATS[x.etat] ? x.etat : 'inconnu', projet = projetDe(x), id = h(x.id);
     var p = nomProjetDe(x), q = quand(x.creeLeMs), ab = x.abonnement === '1' || x.abonnement === '2' ? 'via abonnement ' + x.abonnement : '';
     var texte = String(x.texte || '').trim();
     if (!texte) texte = Number(x.captures) > 0 ? '(capture seule, sans texte)' : x.audio ? '(note vocale seule)' : '(sans texte)';
@@ -1744,7 +1774,7 @@
         + '<img src="' + h(im[k]) + '" alt="" loading="lazy" decoding="async"><span aria-hidden="true">' + t + '</span></button>';
     });
     return '<li class="sgn-carte e-' + e + '" data-id="' + id + '">'
-      + '<div class="sgn-carte-h"><span class="sgn-pil">' + h(ETATS[x.etat] || String(x.etat || 'état inconnu').slice(0, 20)) + '</span>'
+      + '<div class="sgn-carte-h"><span class="sgn-pil">' + h(reglee ? 'réglé' : ETATS[x.etat] || String(x.etat || 'état inconnu').slice(0, 20)) + '</span>'
       + '<span>' + h([q, p, ab].filter(Boolean).join(' · ')) + '</span></div>'
       + '<p class="sgn-carte-t">' + h(texte) + '</p>'
       + (x.resume ? '<p class="sgn-carte-r">' + h(String(x.resume).slice(0, 500)) + '</p>' : '')

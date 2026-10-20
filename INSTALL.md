@@ -84,7 +84,7 @@ Expose les mêmes routes dans le serveur du projet :
   gestionnaire de secrets du projet, jamais en dur) et `PIECES`, un objet `{ put(id, octets, { httpMetadata: { contentType } }),
   get(id), delete(id) }` branché sur le stockage du projet (S3, GCS, Firebase Storage, disque…).
 - `GET /piece/<id>` → sert le fichier rangé (en-têtes : son type, `X-Content-Type-Options: nosniff`).
-- Toutes les autres routes (`GET /demandes`, `POST /demandes/<réf>/renvoyer|annuler|valider`, `POST /retour`, `GET / POST /etat`,
+- Toutes les autres routes (`GET /demandes`, `POST /demandes/<réf>/renvoyer|annuler|valider|regler|rouvrir`, `POST /retour`, `GET / POST /etat`,
   `GET / POST /routine`, `/auth/…`) → le plus simple est de passer toute requête à `routeur(request, env)` (exporté par
   `worker.mjs`), qui fait l'aiguillage. Le stockage sert aussi à du JSON : `put(clé, texte, …)` doit accepter une chaîne, et
   `get(clé)` rendre `{ body, httpMetadata }` (ou un objet avec `text()`), `null` si la clé n'existe pas ; `delete(clé)` (sans lui,
@@ -196,6 +196,8 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   porte aussi `mode`, `abonnement` (« 1 » ou « 2 »), `envoyeLeMs`, et, quand la routine les a renvoyés, `images`
   (`{ avant, apres }` : des adresses du relais), `annulation`, `apercu` ; `actions` liste ce que la page peut proposer
   (`annuler`, `valider`, `renvoyer`). Le lien de la session Claude n'y figure que si `MONTRER_SUIVI = "oui"` (comme après l'envoi).
+  `regleeLeMs` : la conversation que la personne a rangée elle-même dans « Réglé » (l'Atelier : `POST /demandes/<réf>/regler`,
+  enlevée par `…/rouvrir` ou quand la demande repart chez Claude) ; rien ne part chez Claude, l'état reste le sien.
 - **Le retour de la routine** : le relais écrit lui-même, à la fin du texte de chaque signalement, un bloc « RETOUR » avec la
   commande `curl` à lancer (`POST /retour`) et la ligne `MODE : direct` ou `MODE : à valider`. Chaque demande a son propre jeton
   de retour, aléatoire ; le relais n'en garde que l'empreinte sha256, et chaque nouvel envoi (renvoi, ANNULER, VALIDER) en tire un
