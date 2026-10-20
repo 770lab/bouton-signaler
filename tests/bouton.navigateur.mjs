@@ -1336,7 +1336,7 @@ try {
   ok((await webauthn(Dp.p)).get === 1 && (await derniere('/demandes')).par === 'session', 'connecté par l’empreinte, la liste s’ouvre (GET /demandes avec la session)');
   let c1 = await carteVue(Dp.p, R1), c2 = await carteVue(Dp.p, R2), c3 = await carteVue(Dp.p, R3), c4 = await carteVue(Dp.p, R4);
   const piece = (v) => v.startsWith('Avant ' + VRAI + '/piece/') || v.startsWith('Après ' + VRAI + '/piece/');
-  ok(c1.pil === 'à valider' && c1.meta.endsWith(' · via abonnement 1') && c1.rangs.map((r) => r.join(' | ')).join(' / ') === 'Mettre en ligne | Voir la PR / Ouvrir dans Claude | Voir l’aperçu'
+  ok(c1.pil === 'à valider' && c1.meta.endsWith(' · via abonnement 1') && c1.rangs.map((r) => r.join(' | ')).join(' / ') === 'Mettre en ligne | Voir la PR / Ouvrir dans Claude | Voir l’aperçu / Marquer comme réglée'
     && c1.vign.length === 2 && c1.vign.every(piece) && /attend ta validation/.test(c1.notes), 'à valider : « via abonnement 1 », avant / après (servies par le relais), « Mettre en ligne » et « Voir la PR », puis les liens');
   ok(c2.pil === 'en ligne' && c2.rangs.map((r) => r.join(' | ')).join(' / ') === 'Annuler / Ouvrir dans Claude | Voir la PR' && c2.vign.length === 2, 'en ligne, avec de quoi annuler : « Annuler »');
   ok(c3.pil === 'à valider' && / · Avinou Malkenou · /.test(c3.meta) && /mis en ligne par son propriétaire, depuis son Mac/.test(c3.notes) && !c3.rangs.flat().includes('Mettre en ligne') && c3.rangs[0].join() === 'Voir la PR',

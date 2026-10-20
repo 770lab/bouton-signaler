@@ -1367,7 +1367,7 @@
   // ── MES DEMANDES : ce que le relais a gardé des demandes de CETTE clé, avec leur état ──────────────────────────────────────
   // Les états et leurs libellés : les mêmes que le relais (LIBELLES_ETATS de relay/coeur.mjs).
   var ETATS = { envoyee: 'en cours', pas_partie: 'pas partie', a_relire: 'à relire', question: 'question', rien: 'rien à faire', echec: 'échec', en_ligne: 'en ligne',
-    a_valider: 'à valider', annulee: 'annulée', en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours' };
+    a_valider: 'à valider', annulee: 'annulée', en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours', reglee: 'réglée' };
   var A_TRAITER = { question: 1, a_relire: 1, a_valider: 1, pas_partie: 1 };   // ce qui attend le propriétaire
   var EN_COURS = { envoyee: 1, en_cours_annulation: 1, en_cours_validation: 1 };   // une session Claude y travaille
   var FILTRES = [
@@ -1566,6 +1566,12 @@
       },
       conflit: function (j) { return /abonnement/.test(String(j.erreur || '')) ? phrase(j.erreur) : 'Cette demande est déjà repartie : rien à renvoyer.'; } }).then(apresAction);
   }
+  // « Marquer comme réglée » : la personne classe elle-même une demande qui l'attend ; elle ne compte plus « à traiter ».
+  function regler(id, el) {
+    if (!aAcces() || !id) return;
+    agir('regler', id, el, {}, { enCours: 'Classement…', echec: 'Pas classée : ',
+      ok: function () { return ['Demande marquée comme réglée.', 'ok']; } }).then(apresAction);
+  }
   // « Annuler » une modification en ligne (après l'appui de 1,2 s) : le relais lance le travail ANNULER (git revert, en ligne).
   function annulerMiseEnLigne(id, el) {
     if (!aAcces() || !id) return;
@@ -1720,7 +1726,7 @@
     var p = nomProjetDe(x), q = quand(x.creeLeMs), ab = x.abonnement === '1' || x.abonnement === '2' ? 'via abonnement ' + x.abonnement : '';
     var texte = String(x.texte || '').trim();
     if (!texte) texte = Number(x.captures) > 0 ? '(capture seule, sans texte)' : x.audio ? '(note vocale seule)' : '(sans texte)';
-    var acts = actionsDe(x), faire = [], liensH = [], notes = [];
+    var acts = actionsDe(x), faire = [], liensH = [], notes = [], reglage = [];
     var liens = (Array.isArray(x.liens) ? x.liens : []).map(httpsSur).filter(Boolean), pr = liens.filter(estPr)[0] || '', lien = liens[0] || '';
     var session = httpsSur(x.sessionUrl), apercu = httpsSur(x.apercu);
     var a = function (href, t) { return '<a class="sgn-act" href="' + h(href) + '" target="_blank" rel="noopener noreferrer">' + t + '</a>'; };
@@ -1735,6 +1741,7 @@
       if (autre) faire.push('<button type="button" class="sgn-act" data-a="renvoyer" data-id="' + id + '" data-ab="' + autre + '" aria-label="Renvoyer sur l’abonnement ' + autre + '">Renvoyer sur l’autre abonnement</button>');
       if (EN_COURS[x.etat]) notes.push('Pas de nouvelle de Claude depuis plus de 15 minutes.');
     }
+    if (acts.indexOf('regler') >= 0) reglage.push('<button type="button" class="sgn-act" data-a="regler" data-id="' + id + '">Marquer comme réglée</button>');
     if (session) liensH.push(a(session, 'Ouvrir dans Claude'));
     if (apercu) liensH.push(a(apercu, 'Voir l’aperçu'));
     if (lien && !(x.etat === 'a_valider' && lien === pr)) liensH.push(a(lien, estPr(lien) ? 'Voir la PR' : 'Voir le lien'));
@@ -1753,6 +1760,7 @@
       + (vign.length ? '<div class="sgn-avap">' + vign.join('') + '</div>' : '')
       + (faire.length ? '<div class="sgn-actions">' + faire.slice(0, 3).join('') + '</div>' : '')
       + (liensH.length ? '<div class="sgn-actions">' + liensH.slice(0, 3).join('') + '</div>' : '')
+      + (reglage.length ? '<div class="sgn-actions">' + reglage.join('') + '</div>' : '')
       + '</li>';
   }
   function bas(actualiser) {
@@ -1934,6 +1942,7 @@
     else if (a === 'sansprojet') { D.projet = null; if (D.auto) D.filtre = filtreAuto(); rendre(); }
     else if (a === 'actualiser') { rendre('Actualisation…'); chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(D.erreur ? '' : 'Liste à jour (' + heure() + ').', 'ok'); }); }
     else if (a === 'renvoyer') renvoyer(el.getAttribute('data-id'), el, el.getAttribute('data-ab'));
+    else if (a === 'regler') regler(el.getAttribute('data-id'), el);
     else if (a === 'valider') mettreEnLigne(el.getAttribute('data-id'), el);
     else if (a === 'annuler') { /* rien au simple toucher : brancherTenir (garder appuyé 1,2 s) */ }
     else if (a === 'agrandir') {

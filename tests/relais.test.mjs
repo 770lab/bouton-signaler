@@ -1483,7 +1483,7 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
   await retourDe(env, { id: a.ref, cle: jeton, etat: 'a_valider', resume: 'Prêt.', liens: ['https://github.com/770lab/home/pull/12', 'https://770lab.com/home/'],
     images: { avant: PNG_1x1, apres: PNG_B } });
   const pub = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === a.ref);
-  assert.deepEqual(pub.actions, ['valider']);
+  assert.deepEqual(pub.actions, ['valider', 'regler']);
   // La clé seule ne suffit pas ; une session de plus de 5 minutes non plus (403, pas 401 : la page garde sa session).
   let rep = await appel(env, R, 'POST', chemin);
   assert.equal(rep.status, 403); assert.equal((await rep.json()).empreinte, true);
@@ -1514,7 +1514,7 @@ test('POST /demandes/<réf>/valider : session à empreinte fraîche exigée, à 
   await retourDe(env, { id: av.ref, cle: jetonDe(R.appels[R.appels.length - 1].corps.text), etat: 'a_valider', liens: ['https://github.com/770lab/avinou-malkenou/pull/3'] });
   rep = await appel(env, R, 'POST', '/demandes/' + av.ref + '/valider', { cle: null, entetes: bearer(c.j.session) });
   assert.equal(rep.status, 409); assert.match((await rep.json()).erreur, /Avinou Malkenou est mis en ligne par son propriétaire, depuis son Mac/);
-  assert.equal(C.actionsDemande(lireDemande(env, av.ref), Date.now()).length, 0);
+  assert.equal(C.actionsDemande(lireDemande(env, av.ref), Date.now()).length, 1);  // « Avinou » à valider : seulement « regler »
   // À valider sans PR : 409.
   const sansPr = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
   await retourDe(env, { id: sansPr.ref, cle: jetonDe(R.appels[R.appels.length - 1].corps.text), etat: 'a_valider', liens: [] });
@@ -1999,8 +1999,26 @@ test('GET / POST /routine : clé ou session exigée, choix d’un abonnement non
   assert.ok(R3.appels[R3.appels.length - 1].corps.text.startsWith(C.MARQUE_ANNULER));
 });
 
+test('POST /demandes/<réf>/regler : une demande qui attend passe « réglée », seulement la personne, rien n’est relancé', async () => {
+  const env = envKv(), R = routine([{ status: 429, json: { type: 'error', error: { type: 'rate_limit_error' } } }]);
+  const a = await envoyer(env, R), chemin = '/demandes/' + a.ref + '/regler';
+  assert.equal(lireDemande(env, a.ref).etat, 'pas_partie');
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: CLE_PAUL })).status, 404, 'la demande d’un autre');
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: null })).status, 401);
+  assert.equal((await appel(env, R, 'POST', chemin, { origine: 'https://pirate.fr' })).status, 403);
+  let liste = await (await appel(env, null, 'GET', '/demandes')).json();
+  assert.deepEqual(liste.demandes.find((x) => x.id === a.ref).actions, ['renvoyer', 'regler']);
+  const rep = await appel(env, R, 'POST', chemin), j = await rep.json();
+  assert.equal(rep.status, 200); assert.equal(j.ok, true); assert.equal(j.demande.etat, 'reglee');
+  assert.equal('retourHash' in j.demande, false); assert.equal(R.appels.length, 1, 'aucun appel à la routine');
+  const d = lireDemande(env, a.ref);
+  assert.equal(d.etat, 'reglee'); assert.equal(d.etatAvant, 'pas_partie');
+  assert.equal((await appel(env, R, 'POST', chemin)).status, 409, 'déjà réglée : plus rien à régler');
+  liste = await (await appel(env, null, 'GET', '/demandes')).json();
+  assert.equal(liste.demandes.find((x) => x.id === a.ref).actions, undefined);
+});
 test('les états et les actions (pur) : libellés, à traiter, « Renvoyer » après 15 minutes sans nouvelle', () => {
-  assert.deepEqual(C.ETATS, ['envoyee', 'pas_partie', 'en_cours_annulation', 'en_cours_validation', 'a_relire', 'question', 'rien', 'echec', 'en_ligne', 'a_valider', 'annulee']);
+  assert.deepEqual(C.ETATS, ['envoyee', 'pas_partie', 'en_cours_annulation', 'en_cours_validation', 'reglee', 'a_relire', 'question', 'rien', 'echec', 'en_ligne', 'a_valider', 'annulee']);
   assert.deepEqual([C.LIBELLES_ETATS.en_ligne, C.LIBELLES_ETATS.a_valider, C.LIBELLES_ETATS.annulee, C.LIBELLES_ETATS.en_cours_annulation, C.LIBELLES_ETATS.en_cours_validation],
     ['en ligne', 'à valider', 'annulée', 'annulation en cours', 'mise en ligne en cours']);
   for (const e of C.ETATS) assert.equal(typeof C.LIBELLES_ETATS[e], 'string', e);
@@ -2013,8 +2031,10 @@ test('les états et les actions (pur) : libellés, à traiter, « Renvoyer » ap
   assert.equal(C.peutRenvoyer(Object.assign({}, base, { etat: 'question', envoyeLeMs: 1 }), 1e12), false);
   assert.equal(C.peutRenvoyer({ etat: 'en_cours_annulation', envoyeLeMs: 1 }, 1e12), false, 'sans de quoi annuler');
   assert.equal(C.peutRenvoyer({ etat: 'en_cours_validation', envoyeLeMs: 1, liens: ['https://github.com/o/r/pull/1'] }, 1e12), true);
-  assert.deepEqual(C.actionsDemande({ etat: 'a_valider', liens: ['https://github.com/o/r/pull/1'], page: { url: PAGES.home } }, 0), ['valider']);
-  assert.deepEqual(C.actionsDemande({ etat: 'a_valider', liens: ['https://github.com/o/r/pull/1'], projet: 'avinou' }, 0), []);
+  assert.deepEqual(C.actionsDemande({ etat: 'a_valider', liens: ['https://github.com/o/r/pull/1'], page: { url: PAGES.home } }, 0), ['valider', 'regler']);
+  assert.deepEqual(C.actionsDemande({ etat: 'a_valider', liens: ['https://github.com/o/r/pull/1'], projet: 'avinou' }, 0), ['regler']);
+  assert.deepEqual(C.actionsDemande({ etat: 'question' }, 0), ['regler']);
+  assert.deepEqual(C.actionsDemande({ etat: 'envoyee', texteRoutine: 't', envoyeLeMs: Date.now() }, Date.now()), [], 'en cours : rien à régler');
   assert.deepEqual(C.actionsDemande({ etat: 'en_ligne', annulation: { depot: 'o/r', commits: ['abcdef1'] }, projet: 'home' }, 0), ['annuler']);
   assert.deepEqual(C.prsDe(['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/1/files', 'https://gitlab.com/o/r/pull/1', 42]), ['https://github.com/o/r/pull/1']);
 });

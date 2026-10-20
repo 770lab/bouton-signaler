@@ -254,11 +254,11 @@ export const ETATS_RETOUR = {
   annulee: 'mise en ligne annulée et vérifiée (travail ANNULER)',
 };
 // Les états qu'écrit le relais lui-même (la routine ne peut pas les renvoyer).
-export const ETATS_RELAIS = ['envoyee', 'pas_partie', 'en_cours_annulation', 'en_cours_validation'];
+export const ETATS_RELAIS = ['envoyee', 'pas_partie', 'en_cours_annulation', 'en_cours_validation', 'reglee'];
 export const ETATS = ETATS_RELAIS.concat(Object.keys(ETATS_RETOUR));
 export const LIBELLES_ETATS = Object.freeze({ envoyee: 'en cours', pas_partie: 'pas partie', a_relire: 'à relire', question: 'question',
   rien: 'rien à faire', echec: 'échec', en_ligne: 'en ligne', a_valider: 'à valider', annulee: 'annulée',
-  en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours' });
+  en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours', reglee: 'réglée' });
 // Ce qui attend le propriétaire (le petit nombre rouge du bouton).
 export const A_TRAITER = Object.freeze(['question', 'a_relire', 'a_valider', 'pas_partie']);
 // Une session Claude travaille (et peut être renvoyée si elle ne donne aucune nouvelle pendant 15 minutes).
@@ -512,13 +512,14 @@ export function peutRenvoyer(d, maintenant) {
 }
 // Ce que la page peut proposer pour cette demande (le relais refuse tout le reste) : 'annuler' (en ligne, avec ce qu'il faut
 // pour annuler), 'valider' (à valider, avec sa PR ; jamais Avinou Malkenou : son propriétaire le met en ligne depuis son Mac),
-// 'renvoyer' (peutRenvoyer).
+// 'renvoyer' (peutRenvoyer), 'regler' (tout ce qui attend le propriétaire : il la classe lui-même, sans rien changer en ligne).
 export function actionsDemande(d, maintenant) {
   if (!d || typeof d !== 'object') return [];
   const projet = projetDeLaDemande(d), a = [];
   if (d.etat === 'en_ligne' && d.annulation && projet !== 'avinou') a.push('annuler');
   if (d.etat === 'a_valider' && projet !== 'avinou' && prsDe(d.liens).length) a.push('valider');
   if (peutRenvoyer(d, maintenant)) a.push('renvoyer');
+  if (A_TRAITER.includes(d.etat)) a.push('regler');
   return a;
 }
 
