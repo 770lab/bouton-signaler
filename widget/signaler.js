@@ -43,7 +43,9 @@
  *  l'empreinte (GET /auth/options/connexion ne répond pas 503), « Activer l’empreinte sur cet appareil » est proposé UNE fois
  *  (localStorage signaler_empreinte_proposee_v1). La page ne garde ni ne voit aucun secret : le jeton est signé par le relais.
  *
- *  LE ROND. Un toucher le fait s'enfoncer, puis pendant la photo un anneau tourne autour, une onde s'en échappe et l'étoile tourne
+ *  LE ROND. Un toucher court l'ouvre, avec une vibration (20/10/2026, Yoann : « un seul tap haptique, il se lance ; un clic long et
+ *  qu'on déplace son doigt, il doit se déplacer ») ; navigator.vibrate, ou sur iPhone l'interrupteur caché d'iOS 18 (le tour du
+ *  pupitre). Un toucher le fait s'enfoncer, puis pendant la photo un anneau tourne autour, une onde s'en échappe et l'étoile tourne
  *  (transform et opacité seulement : le compositeur les joue même quand html2canvas occupe la page). Appui long (0,38 s) puis
  *  glisser, au doigt ou à la souris : il se déplace ; sa place est gardée PAR PAGE (localStorage signaler_pos_v1, origine + chemin,
  *  en proportion de l'écran), ramenée dans l'écran à chaque rotation. Déplacé, il porte la classe « sgn-deplace » et left / top en
@@ -1200,6 +1202,24 @@
   window.addEventListener('orientationchange', surRedimension);
   // Toucher court = photographier ; appui long (0,38 s sans bouger) = on le soulève, il suit le doigt ou la souris.
   var finGeste = 0;
+  // LA VIBRATION : navigator.vibrate (Android) ; sur iPhone, qui n'a pas vibrate, l'interrupteur caché d'iOS 18 basculé dans le geste
+  // (le même tour que le pupitre). Marqué data-sgn : la boîte noire ne le note pas.
+  var labHaptique = null;
+  function vibrer(ms) {
+    try {
+      if (typeof navigator.vibrate === 'function') { navigator.vibrate(ms); return; }
+      if (!(/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))) return;
+      if (!labHaptique) {
+        labHaptique = document.createElement('label'); labHaptique.setAttribute('data-sgn', 'haptique'); labHaptique.setAttribute('aria-hidden', 'true');
+        labHaptique.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden';
+        var inp = document.createElement('input'); inp.type = 'checkbox'; inp.setAttribute('switch', ''); inp.tabIndex = -1;
+        labHaptique.appendChild(inp);
+        labHaptique.addEventListener('click', function (e) { e.stopPropagation(); }); inp.addEventListener('click', function (e) { e.stopPropagation(); });
+        document.body.appendChild(labHaptique);
+      }
+      labHaptique.click();
+    } catch (e) {}
+  }
   function gestes(b) {
     var d = null;
     b.addEventListener('pointerdown', function (e) {
@@ -1217,7 +1237,7 @@
         b.classList.remove('sgn-appui'); b.classList.add('sgn-souleve');
         cacherBulle();
         try { b.setPointerCapture(d.id); } catch (er) {}
-        try { if (navigator.vibrate) navigator.vibrate(15); } catch (er) {}
+        vibrer(15);
       }, APPUI_LONG_MS);
     });
     b.addEventListener('pointermove', function (e) {
@@ -1242,6 +1262,7 @@
     b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     b.addEventListener('click', function (e) {
       if (Date.now() - finGeste < 700) { e.preventDefault(); return; }
+      vibrer(10);
       ouvrir();
     });
   }

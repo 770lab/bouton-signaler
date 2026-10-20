@@ -961,6 +961,8 @@ try {
       await p.waitForTimeout(500);
       ok(!(await bulleVue(p)), dit + ' : une requête en 404 n’allume rien (seulement 5xx et réseau)');
       // c) Déplacer le rond : appui long 0,45 s puis glisser ; il s'enfonce dès l'appui ; ce n'est pas un toucher.
+      const espionVibrer = () => p.evaluate(() => { window.__vib = []; Object.defineProperty(navigator, 'vibrate', { configurable: true, value: (ms) => { window.__vib.push(ms); return true; } }); });
+      await espionVibrer();
       const f0 = await boite(p, '.sgn-fab'), but = [12 + 24 + 30, Math.round(ht * 0.62)];
       let enfonce = 1;
       await geste(p, toucher, ligne([f0.cx, f0.cy], but, 14), { attente: 450, auMilieu: async () => { enfonce = await p.$eval('.sgn-fab', (e) => new DOMMatrix(getComputedStyle(e).transform).a); } });
@@ -972,6 +974,8 @@ try {
       ok(!(await p.$('.sgn-boite')) && (await p.evaluate(() => window.Signaler._etat().captures.length)) === 0, dit + ' : le déplacer n’ouvre pas la fenêtre et ne photographie rien');
       ok(b1.x < f1.x + f1.w + 10 && b1.x + b1.w > f1.x + f1.w - 14 && b1.y < f1.y && b1.y + b1.h > f1.y, dit + ' : le nombre rouge suit le rond (son coin haut droit)');
       ok(pos && pos.x >= 0 && pos.x <= 1 && pos.y >= 0 && pos.y <= 1, dit + ' : la place est gardée pour cette page, en proportion (' + (pos ? pos.x + ', ' + pos.y : 'rien') + ')');
+      const vib1 = await p.evaluate(() => window.__vib.slice());
+      ok(vib1.length === 1 && vib1[0] === 15, dit + ' : soulevé, il vibre (15 ms) ; le déplacer n’est pas un toucher : pas la vibration du toucher (' + JSON.stringify(vib1) + ')');
       pbs = pbs.concat(await controler(p));
       await capture(p, nom + '-deplace.png');
       // Glissé hors de l'écran : il reste dedans, loin des bords.
@@ -1035,8 +1039,10 @@ try {
       await p.waitForTimeout(300);
       const f4 = await boite(p, '.sgn-fab');
       ok(Math.abs(f4.cx - but[0]) <= 1 && Math.abs(f4.cy - but[1]) <= 1 && (await pastille(p)) === '1', dit + ' : après un rechargement, le rond est à sa place et la pastille dit toujours 1');
+      await espionVibrer();
       for (let k = 2; k <= 5; k++) {
         await ouvrirAvecPhoto(p, toucher, k);
+        if (k === 2) { const vib2 = await p.evaluate(() => window.__vib.slice()); ok(vib2[0] === 10, dit + ' : un toucher court vibre (10 ms) et ouvre la fenêtre (' + JSON.stringify(vib2) + ')'); }
         if (k === 3) {
           await toucherEl(p, toucher, '[data-a="autre"]');
           await p.reload(); await p.waitForSelector('.sgn-fab'); await p.waitForTimeout(200);
