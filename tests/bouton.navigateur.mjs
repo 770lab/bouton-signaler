@@ -1426,16 +1426,13 @@ try {
   await Dp.p.waitForSelector('.sgn-vis');
   await Dp.p.tap('.sgn-vis [data-v="fermer"]');
   ok(!(await Dp.p.$('.sgn-vis')) && (await Dp.p.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-k'))) === 'apres', '« Fermer » aussi ; le focus revient sur la vignette');
-  // L'empreinte trop vieille (6 minutes, la page et le relais d'accord) : « Mettre en ligne » la redemande D'ABORD.
+  // Connecté par l'empreinte il y a plus de 5 minutes : « Mettre en ligne » part TOUT DE SUITE, sans seconde empreinte
+  // (choix du propriétaire, 2026-10-21 : la session de l'empreinte suffit, la page et le relais d'accord).
   const R5 = (await signalerNode('Le menu se ferme tout seul.')).ref;
   await retourDe(R5, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(78)], images: { avant: AVANT, apres: APRES } });
   await ctl('decalage', { ms: 6 * 60000 });
   await Dp.p.evaluate((ms) => { const n = Date.now.bind(Date); Date.now = () => n() + ms; }, 6 * 60000);
-  const jA = (await requetes()).length;
   await actualiser(Dp.p, true);
-  // La liste redessinée (session de plus de 5 min, une carte « Mettre en ligne ») précharge un défi : on attend qu'il soit arrivé.
-  for (let i = 0; i < 50 && !(await requetes()).slice(jA).some((x) => x.m === 'POST' && x.p === '/auth/options/connexion'); i++) await attendre(100);
-  await attendre(200);
   let j0 = (await requetes()).length, g0 = (await webauthn(Dp.p)).get;
   n0 = (await ctl('appels')).length;
   await versCarte(Dp.p, R5);
@@ -1443,9 +1440,9 @@ try {
   await etatDit(Dp.p, /^Mise en ligne lancée/);
   let suite = (await requetes()).slice(j0).filter((x) => x.m === 'POST').map((x) => x.p.replace(R5, '<réf>'));
   av = (await ctl('appels')).slice(n0);
-  ok((await webauthn(Dp.p)).get === g0 + 1 && suite.join(', ') === '/auth/connexion, /demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(78)),
-    'empreinte de plus de 5 minutes : « Mettre en ligne » redemande l’empreinte d’abord (défi préchargé), puis met en ligne (' + suite.join(', ') + ')');
-  // Le relais seul la juge trop vieille (sa montre avance, pas celle de la page) : 403 « empreinte », l'empreinte, puis de nouveau.
+  ok((await webauthn(Dp.p)).get === g0 && suite.join(', ') === '/demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(78)),
+    'connecté par l’empreinte il y a 6 minutes : « Mettre en ligne » part sans seconde empreinte (' + suite.join(', ') + ')');
+  // Le relais, 12 minutes après l'empreinte (sa montre avance) : la session suffit toujours, pas de 403.
   const R6 = (await signalerNode('Le bouton Imprimer est caché.')).ref;
   await retourDe(R6, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(79)] });
   await ctl('decalage', { ms: 12 * 60000 });
@@ -1456,8 +1453,8 @@ try {
   await etatDit(Dp.p, /^Mise en ligne lancée/);
   suite = (await requetes()).slice(j0).filter((x) => x.m === 'POST').map((x) => x.p.replace(R6, '<réf>'));
   av = (await ctl('appels')).slice(n0);
-  ok((await webauthn(Dp.p)).get === g0 + 1 && suite.join(', ') === '/demandes/<réf>/valider, /auth/options/connexion, /auth/connexion, /demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(79)),
-    'le relais refuse une empreinte trop vieille (403) : la page la redemande, puis met en ligne (' + suite.join(', ') + ')');
+  ok((await webauthn(Dp.p)).get === g0 && suite.join(', ') === '/demandes/<réf>/valider' && av.length === 1 && av[0].text.includes(PR(79)),
+    'le relais 12 minutes après l’empreinte : la session suffit, mise en ligne sans 403 (' + suite.join(', ') + ')');
   // Sans nouvelle depuis 15 minutes : « Renvoyer » et « Renvoyer sur l’autre abonnement ».
   await ctl('decalage', { ms: 17 * 60000 });
   await actualiser(Dp.p, true);
