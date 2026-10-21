@@ -2097,6 +2097,8 @@
           var r = rendus; setTimeout(function () { if (fond && !envoiEnCours && rendus === r) fermer(); }, 8000);
           chargerDemandes();
           if (j.parCle) proposerEmpreinte();
+          // La page qui porte le bouton peut suivre l'envoi (l'Atelier 770LAB ouvre aussitôt la demande, comme celui de gestion).
+          try { window.dispatchEvent(new CustomEvent('signaler:envoye', { detail: { ref: String(j.ref || '') } })); } catch (e) {}
           return;
         }
         if (j && j.coupe) { couper(); rendre(COUPE_MSG, 'ko'); return; }

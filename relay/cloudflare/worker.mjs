@@ -264,7 +264,7 @@ export async function signaler(req, env, outils) {
   if (st) {
     // Une demande qui ne se range pas (quota du stockage…) ne change rien à la réponse : la routine, elle, a été prévenue ou non.
     try {
-      await ecrireDemande(st, C.nouvelleDemande({ id: ref, qui: a.qui, s: s, quand: quand, r: r, retourHash: await C.sha256Hex(jeton), texteRoutine: texte, mode: mode }));
+      await ecrireDemande(st, C.nouvelleDemande({ id: ref, qui: a.qui, s: s, quand: quand, r: r, retourHash: await C.sha256Hex(jeton), texteRoutine: texte, mode: mode, pieces: pieces }));
       await st.ecrireTexte(C.cleIndex(a.qui), JSON.stringify(C.indexAvec(await lireIndex(st, a.qui), ref)));
       demande = true;
     } catch (e) { demande = false; }
@@ -283,9 +283,11 @@ export async function demandes(req, env) {
   if (a.refus) return a.refus;
   const st = stockage(env);
   if (!st) return json({ ok: true, demandes: [], stockage: false }, 200, cors);
-  const ids = (await lireIndex(st, a.qui)).slice(0, C.LIMITES.demandesListe), maintenant = Date.now();
+  // Les siennes, et celles d'ailleurs (KOULAM : POST /externe), pour toute personne connectée.
+  const siennes = (await lireIndex(st, a.qui)).slice(0, C.LIMITES.demandesListe), maintenant = Date.now();
+  const ids = siennes.concat((await lireIndex(st, C.CLE_INDEX_EXTERNE.slice('demandes:'.length))).filter((x) => !siennes.includes(x)));
   const liste = (await Promise.all(ids.map((id) => (C.REF_RX.test(String(id)) ? lireDemande(st, id) : null))))
-    .filter((d) => d && d.qui === a.qui)
+    .filter((d) => d && (d.qui === a.qui || (d.externe && d.qui === C.QUI_EXTERNE)))
     .sort((x, y) => (y.creeLeMs || 0) - (x.creeLeMs || 0))
     .map((d) => C.demandePublique(d, { suivi: env.MONTRER_SUIVI === 'oui', maintenant: maintenant }));
   return json({ ok: true, demandes: liste }, 200, cors);
@@ -293,14 +295,17 @@ export async function demandes(req, env) {
 
 // Le début commun à renvoyer / annuler / valider : accès, stockage, la demande de CETTE personne (celle d'un autre : la même
 // réponse qu'une réf. inconnue). Rend { a, st, d, cors } ou { refus: Response }.
-async function maDemande(req, env, id) {
+// `marque` : « Réglé » / « À vérifier » (marquer) — permis aussi sur une demande d'ailleurs (KOULAM) ; les autres gestes, jamais.
+async function maDemande(req, env, id, marque) {
   const cors = entetesCors(req, env);
   const a = await acces(req, env, cors);
   if (a.refus) return { refus: a.refus };
   const st = stockage(env);
   if (!st) return { refus: json({ ok: false, erreur: SANS_STOCKAGE }, 503, cors) };
   const d = await lireDemande(st, id);
-  if (!d || d.qui !== a.qui) return { refus: json({ ok: false, erreur: 'demande introuvable' }, 404, cors) };
+  const externe = !!(d && d.externe && d.qui === C.QUI_EXTERNE);
+  if (!d || (d.qui !== a.qui && !externe)) return { refus: json({ ok: false, erreur: 'demande introuvable' }, 404, cors) };
+  if (externe && !marque) return { refus: json({ ok: false, erreur: 'demande de ' + d.externe + ' : elle se traite dans sa bulle « Modifier avec Claude »' }, 409, cors) };
   return { a: a, st: st, d: d, cors: cors };
 }
 const publique = (env, d) => C.demandePublique(d, { suivi: env.MONTRER_SUIVI === 'oui', maintenant: Date.now() });
@@ -392,7 +397,7 @@ export async function valider(req, env, outils, id) {
 // POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l'Atelier (regleeLeMs), gardée par le relais pour que la
 // personne la retrouve sur tous ses appareils. Ni routine, ni interrupteur : rien ne part chez Claude.
 async function marquer(req, env, id, quoi) {
-  const m = await maDemande(req, env, id);
+  const m = await maDemande(req, env, id, true);
   if (m.refus) return m.refus;
   const { a, st, d, cors } = m;
   const x = quoi === 'regler' ? C.regler(d, Date.now()) : quoi === 'rouvrir' ? C.rouvrir(d)
@@ -406,6 +411,28 @@ export const rouvrir = (req, env, outils, id) => marquer(req, env, id, 'rouvrir'
 // POST /demandes/<réf>/verifier · /deverifier : la marque « À vérifier » de l'Atelier (averifierLeMs), pareil (21/10/2026).
 export const verifier = (req, env, outils, id) => marquer(req, env, id, 'verifier');
 export const deverifier = (req, env, outils, id) => marquer(req, env, id, 'deverifier');
+
+// POST /externe : la copie d'une demande d'ailleurs (KOULAM, coeur.mjs « Les demandes d'ailleurs »), de serveur à serveur (pas de CORS),
+// avec le secret EXTERNE_JETON. Rien ne part chez Claude : la demande est seulement rangée, pour l'Atelier.
+export async function externe(req, env) {
+  const jeton = String(env.EXTERNE_JETON || '').trim(), dit = String(req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  if (!jeton) return json({ ok: false, erreur: 'demandes d’ailleurs pas branchées (secret EXTERNE_JETON)' }, 503);
+  if (!C.memeJeton(dit, jeton)) return json({ ok: false, erreur: 'clé refusée' }, 403);
+  const st = stockage(env);
+  if (!st) return json({ ok: false, erreur: SANS_STOCKAGE }, 503);
+  const b = await petitCorps(req, 20000);
+  if (b.corps === undefined) return json({ ok: false, erreur: b.trop ? 'demande trop lourde' : 'demande illisible' }, 400);
+  const c = b.corps && typeof b.corps === 'object' ? b.corps : {};
+  const id = C.PROJETS_EXTERNES.includes(c.projet) && /^[A-Za-z0-9_-]{6,60}$/.test(String(c.ref || '')) ? await C.idExterne(c.projet, c.ref) : '';
+  const avant = id ? await lireDemande(st, id) : null;
+  const r = await C.lireExterne(c, avant && avant.externe ? avant : null, Date.now());
+  if (!r.ok) return json({ ok: false, erreur: r.erreur }, 400);
+  await ecrireDemande(st, r.demande);
+  const cleIdx = C.CLE_INDEX_EXTERNE.slice('demandes:'.length);
+  await st.ecrireTexte(C.cleIndex(cleIdx), JSON.stringify(C.indexAvec(await lireIndex(st, cleIdx), r.demande.id)));
+  console.log('[externe]', JSON.stringify({ projet: r.demande.externe, ref: r.demande.id, etat: r.demande.etat }));
+  return json({ ok: true, ref: r.demande.id });
+}
 
 // Les notifications : un abonnement par appareil, rangés par personne (« push:<nom> », 10 au plus, le plus récent d'abord).
 // Sans VAPID_PUBLIC et VAPID_PRIVEE : rien ne part (la page le sait par GET /push/cle).
@@ -757,6 +784,7 @@ export async function routeur(req, env, outils) {
     if (m === 'GET' && p === '/push/cle') return await pushCle(req, env);
     if (m === 'POST' && (p === '/push/abonner' || p === '/push/desabonner')) return await pushAbonner(req, env, p === '/push/desabonner');
     if (m === 'POST' && p === '/retour') return await retour(req, env, outils);
+    if (m === 'POST' && p === '/externe') return await externe(req, env);
     if (m === 'GET' && p === '/etat') return await etat(req, env);
     if (m === 'POST' && p === '/etat') return await changerEtat(req, env);
     if ((m === 'GET' || m === 'POST') && p === '/routine') return await routine(req, env);
