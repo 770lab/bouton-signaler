@@ -1329,17 +1329,60 @@
   function eteindreAlerte() { if (fab) fab.classList.remove('sgn-alerte'); majPastille(); }
 
   // ── LA PAROLE : dictée du navigateur quand il sait (Chrome, Edge, Safari), sinon une note vocale jointe ───────────────────
+  // LES MOTS DOUBLÉS ET L'ARRÊT AU PREMIER SILENCE (21/10/2026, Yoann : « ça me dédouble les mots […] et ça s'arrête, je suis obligé à
+  // chaque fois de rappuyer »). En mode continu, Chrome renvoie des résultats qui reprennent les précédents (« dans », « dans chaque »,
+  // « dans chaque conversation »…) et coupe au premier silence. Désormais une phrase à la fois (continuous = false), relancée tant
+  // qu'on n'a pas rappuyé, ses morceaux recollés sans répétition (recoller) ; trois relances sans un mot l'arrêtent.
   var Reco = window.SpeechRecognition || window.webkitSpeechRecognition;
+  function cleMot(m) { return String(m).toLowerCase().replace(/[.,;:!?…«»"'’()]/g, ''); }
+  // morceaux : les textes des résultats, dans l'ordre → le texte dicté, chaque mot repris d'un morceau à l'autre écrit une fois
+  function recoller(morceaux) {
+    var acquis = [];
+    (morceaux || []).forEach(function (s) {
+      var m = String(s == null ? '' : s).trim().split(/\s+/).filter(Boolean), k = Math.min(acquis.length, m.length);
+      for (; k > 0; k--) {
+        var pareil = true;
+        for (var i = 0; i < k && pareil; i++) pareil = cleMot(acquis[acquis.length - k + i]) === cleMot(m[i]);
+        if (pareil) break;
+      }
+      acquis = acquis.concat(m.slice(k));
+    });
+    return acquis.join(' ');
+  }
+  // garder : la fin de la phrase en cours s'écrit encore (on a rappuyé) ; sinon (fenêtre fermée, envoi) plus rien ne s'écrit
+  function arreterDictee(garder) {
+    var t = dictee; if (!t) return;
+    dictee = null; t.voulu = false; t.garder = garder !== false; if (t.ui) t.ui();
+    try { if (t.r) t.r.stop(); } catch (e) {}
+  }
   function basculerMicro(bouton, zone, etat) {
     if (Reco) {
-      if (dictee) { dictee.stop(); return; }
-      var r = new Reco(), avant = zone.value ? zone.value.replace(/\s*$/, ' ') : '';
-      r.lang = document.documentElement.lang || 'fr-FR'; r.continuous = true; r.interimResults = true;
-      r.onresult = function (ev) { var t = ''; for (var i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript; zone.value = avant + t; B.texte = zone.value; sauver(); };
-      r.onerror = function (ev) { dire(etat, ev && ev.error === 'not-allowed' ? 'Micro refusé : autorise-le dans le navigateur.' : 'La dictée s’est arrêtée.', 'ko'); };
-      r.onend = function () { dictee = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Dicter'; };
-      try { r.start(); dictee = r; bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la dictée'; dire(etat, 'À l’écoute… parle normalement.'); }
-      catch (e) { dire(etat, 'Dictée impossible sur ce navigateur.', 'ko'); }
+      if (dictee) { arreterDictee(true); return; }
+      var tour = dictee = { r: null, voulu: true, garder: true }, base = zone.value ? zone.value.replace(/\s*$/, ' ') : '', vides = 0;
+      tour.ui = function () { bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Dicter'; };
+      var fin = function (msg, ton) { tour.voulu = false; if (dictee === tour) { dictee = null; tour.ui(); } if (msg) dire(etat, msg, ton); };
+      var lancer = function () {
+        var r = tour.r = new Reco(), dit = '';
+        r.lang = document.documentElement.lang || 'fr-FR'; r.continuous = false; r.interimResults = true; r.maxAlternatives = 1;
+        r.onresult = function (ev) {
+          if (!tour.garder || (dictee && dictee !== tour)) return;
+          var l = []; for (var i = 0; i < ev.results.length; i++) l.push(ev.results[i][0].transcript);
+          dit = recoller(l); zone.value = base + dit; B.texte = zone.value; sauver();
+        };
+        r.onerror = function (ev) {
+          var e = String(ev && ev.error);
+          if (e === 'not-allowed' || e === 'service-not-allowed') fin('Micro refusé : autorise-le dans le navigateur.', 'ko');
+          else if (e === 'audio-capture' || e === 'network') fin('La dictée s’est arrêtée.', 'ko');
+        };
+        r.onend = function () {
+          if (dit.trim()) { vides = 0; base = (base + dit).replace(/\s*$/, ' '); } else vides++;
+          if (!tour.voulu || vides >= 3) { fin(tour.voulu ? 'Dictée arrêtée : je n’entends plus rien. Rappuie sur « Dicter » pour reprendre.' : ''); return; }
+          setTimeout(function () { if (!tour.voulu) return; try { lancer(); } catch (e) { fin('La dictée s’est arrêtée.', 'ko'); } }, 120);
+        };
+        r.start();
+      };
+      try { lancer(); bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la dictée'; dire(etat, 'À l’écoute… parle normalement.'); }
+      catch (e) { fin('Dictée impossible sur ce navigateur.', 'ko'); }
       return;
     }
     if (enregistreur) { enregistreur.stop(); return; }
@@ -1820,7 +1863,7 @@
   // o.garder : le brouillon reste tel quel (« + Un autre écran ») ; sinon, fenêtre quittée sans rien y mettre = rien à garder.
   function fermer(o) {
     o = o || {};
-    if (dictee) try { dictee.stop(); } catch (e) {}
+    arreterDictee(false);
     if (enregistreur) try { enregistreur.stop(); } catch (e) {}
     if (observateur) { observateur.disconnect(); observateur = null; }
     dessinAjuster = null;
@@ -2035,7 +2078,7 @@
       });
       return;
     }
-    if (dictee) try { dictee.stop(); } catch (e) {}
+    arreterDictee(false);
     envoiEnCours = true;
     var bouton = fond.querySelector('.sgn-envoyer'); bouton.disabled = true; dire(etat, 'Envoi…');
     var a = Date.now();

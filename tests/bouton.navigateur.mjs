@@ -434,6 +434,39 @@ try {
   await capture(o.p, 'fenetre-ordinateur.png');
   await o.ctx.close();
 
+  console.log('3 bis. La dictée : pas de mots doublés, relancée jusqu’à ce qu’on rappuie (21/10/2026)');
+  // Un faux micro qui fait comme Chrome sur Android : chaque résultat reprend le précédent (« dans », « dans chaque »…), et la
+  // reconnaissance s'arrête à la fin de chaque phrase. Avant : « dansdans chaquedans chaque conversation », puis plus rien.
+  const FAUX_MICRO = () => {
+    const PHRASES = [['dans', 'dans chaque', 'dans chaque conversation'], ['mets-moi', 'mets-moi un lien']];
+    let n = 0; window.__srLancements = 0;
+    class SR {
+      start() {
+        const phrase = PHRASES[n++]; window.__srLancements++;
+        setTimeout(() => {
+          if (!this.arrete && phrase) this.onresult && this.onresult({ results: phrase.map((t) => [{ transcript: t }]) });
+          else if (!this.arrete) this.onerror && this.onerror({ error: 'no-speech' });
+          this.onend && this.onend();
+        }, 30);
+      }
+      stop() { this.arrete = true; }
+    }
+    window.SpeechRecognition = SR; window.webkitSpeechRecognition = SR;
+  };
+  const dct = await page({ width: 412, height: 915 }, { init: FAUX_MICRO });
+  await (await dct.p.waitForSelector('.sgn-fab')).click();
+  await dct.p.waitForSelector('.sgn-texte');
+  await dct.p.click('[data-a="micro"]');
+  const finie = await dct.p.waitForFunction(() => window.__srLancements >= 5 && (document.querySelector('[data-a="micro"]').textContent || '').trim() === 'Dicter', null, { timeout: 10000 }).then(() => true, () => false);
+  const dit = await dct.p.$eval('.sgn-texte', (z) => z.value.trim());
+  ok(finie && dit === 'dans chaque conversation mets-moi un lien', 'deux phrases, chaque mot une seule fois (et pas « dansdans chaquedans… ») — « ' + dit + ' »');
+  ok(await dct.p.evaluate(() => window.__srLancements) === 5 && /je n’entends plus rien/.test(await texte(dct.p, '.sgn-etat')),
+    'relancée après chaque phrase, arrêtée après trois silences, et ça se dit');
+  await dct.p.click('[data-a="micro"]'); await dct.p.click('[data-a="micro"]'); await dct.p.waitForTimeout(600);
+  ok(await dct.p.evaluate(() => window.__srLancements) === 6 && (await texte(dct.p, '[data-a="micro"]')) === 'Dicter', 'rappuyer arrête : plus aucune relance');
+  ok(!dct.erreursPage.length, 'aucune erreur dans la page' + (dct.erreursPage.length ? ' — ' + dct.erreursPage.join(' ; ') : ''));
+  await dct.ctx.close();
+
   console.log('4. L’interrupteur du pupitre (GET /etat)');
   remettre(); faux.etat = 'off';
   let e = await page({ width: 390, height: 844 }, { cle: CLE });
