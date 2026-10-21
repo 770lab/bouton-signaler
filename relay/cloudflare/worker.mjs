@@ -33,6 +33,7 @@
 // personne n'avait encore jamais eu d'appareil, ou avant ce changement. Un appareil inscrit avec la clé seule alors que la personne
 // en a déjà eu un (une clé volée suffit pour cela) se connecte et signale comme avant, mais ne crée pas de clé et ne met pas en ligne.
 import * as C from '../coeur.mjs';
+import * as P from '../push.mjs';
 
 const PIECE_RX = /^\/piece\/([0-9a-f]{32})$/;
 const DEMANDE_RX = /^\/demandes\/([0-9a-f]{12})\/(renvoyer|annuler|valider|regler|rouvrir)$/;
@@ -379,10 +380,61 @@ async function marquer(req, env, id, quoi) {
 export const regler = (req, env, outils, id) => marquer(req, env, id, 'regler');
 export const rouvrir = (req, env, outils, id) => marquer(req, env, id, 'rouvrir');
 
+// Les notifications : un abonnement par appareil, rangés par personne (« push:<nom> », 10 au plus, le plus récent d'abord).
+// Sans VAPID_PUBLIC et VAPID_PRIVEE : rien ne part (la page le sait par GET /push/cle).
+const clePush = (qui) => 'push:' + qui;
+const pushPret = (env) => !!(env.VAPID_PUBLIC && env.VAPID_PRIVEE);
+async function lirePush(st, qui) {
+  const x = lireJson(await st.lireTexte(clePush(qui)));
+  return Array.isArray(x) ? x.map(P.abonnementValide).filter(Boolean) : [];
+}
+// Prévient la personne que sa demande a changé d'état : sur tous ses appareils ; un abonnement mort (404 / 410) est retiré. Une
+// panne de push ne doit jamais empêcher d'enregistrer le retour : tout est attrapé.
+async function notifier(env, st, d, outils) {
+  if (!pushPret(env) || !P.ETATS_NOTIFIES.includes(d.etat)) return;
+  try {
+    const liste = await lirePush(st, d.qui);
+    if (!liste.length) return;
+    const message = P.messagePour(d, env.ATELIER_URL || 'https://770lab.com/atelier/');
+    const o = { fetch: (outils && outils.fetch) || fetch, sujet: env.VAPID_SUJET || 'https://770lab.com/atelier/', publique: env.VAPID_PUBLIC, privee: env.VAPID_PRIVEE };
+    const morts = [];
+    const res = await Promise.all(liste.map((a) => P.envoyer(a, message, o).catch(() => ({ ok: false }))));
+    res.forEach((r, i) => { if (r.gone) morts.push(liste[i].endpoint); });
+    if (morts.length) await st.ecrireTexte(clePush(d.qui), JSON.stringify(liste.filter((a) => !morts.includes(a.endpoint))));
+    console.log('[push]', JSON.stringify({ ref: d.id, etat: d.etat, appareils: liste.length, ok: res.filter((r) => r.ok).length, retires: morts.length }));
+  } catch (e) { console.log('[push]', JSON.stringify({ ref: d.id, erreur: (e && e.name) || '?' })); }
+}
+// GET /push/cle : la clé publique (pour s'abonner) ; { pret: false } tant que le relais n'a pas ses clés.
+export async function pushCle(req, env) {
+  return json({ ok: true, pret: pushPret(env), cle: pushPret(env) ? env.VAPID_PUBLIC : null }, 200, entetesCors(req, env));
+}
+// POST /push/abonner { abonnement } · /push/desabonner { endpoint } : l'appareil de la personne (clé ou session).
+export async function pushAbonner(req, env, retirer) {
+  const cors = entetesCors(req, env);
+  const a = await acces(req, env, cors);
+  if (a.refus) return a.refus;
+  const st = stockage(env);
+  if (!st) return json({ ok: false, erreur: SANS_STOCKAGE }, 503, cors);
+  if (!pushPret(env)) return json({ ok: false, erreur: 'les notifications ne sont pas encore réglées sur le relais' }, 503, cors);
+  const b = await petitCorps(req, 4096);
+  if (b.trop || b.illisible) return json({ ok: false, erreur: 'demande illisible' }, 400, cors);
+  const reste = (await lirePush(st, a.qui));
+  if (retirer) {
+    const ep = String((b.corps || {}).endpoint || '');
+    await st.ecrireTexte(clePush(a.qui), JSON.stringify(reste.filter((x) => x.endpoint !== ep)));
+    return json({ ok: true }, 200, cors);
+  }
+  const ab = P.abonnementValide((b.corps || {}).abonnement);
+  if (!ab) return json({ ok: false, erreur: 'abonnement refusé' }, 400, cors);
+  await st.ecrireTexte(clePush(a.qui), JSON.stringify([ab].concat(reste.filter((x) => x.endpoint !== ab.endpoint)).slice(0, 10)));
+  console.log('[push-abonner]', JSON.stringify({ qui: a.qui }));
+  return json({ ok: true }, 200, cors);
+}
+
 // POST /retour : la routine renvoie l'état de la demande (de serveur à serveur : ni origine exigée, ni CORS). Le jeton est comparé
 // par son empreinte, en temps constant ; une réf. inconnue et un mauvais jeton reçoivent EXACTEMENT la même réponse. Les captures
 // avant / après ne sont rangées qu'APRÈS cette vérification (180 jours, comme la demande) et servies sous /piece/<id>.
-export async function retour(req, env) {
+export async function retour(req, env, outils) {
   const b = await petitCorps(req, C.LIMITES.retourOctets);
   if (b.trop) return json({ ok: false, erreur: 'retour trop lourd' }, 413);
   if (b.illisible) return json({ ok: false, erreur: 'retour illisible' }, 400);
@@ -409,6 +461,7 @@ export async function retour(req, env) {
     const vieux = /\/piece\/([0-9a-f]{32})$/.exec(String((d.images || {})[k] || ''));
     if (vieux && st.effacer) { try { await st.effacer(vieux[1]); } catch (e) { /* elle s'effacera d'elle-même */ } }
   }
+  await notifier(env, st, x, outils);
   console.log('[retour]', JSON.stringify({ ref: x.id, qui: x.qui, etat: x.etat, liens: (x.liens || []).length, images: Object.keys(images || {}).length, annulation: !!x.annulation }));
   return json({ ok: true }, 200);
 }
@@ -674,7 +727,9 @@ export async function routeur(req, env, outils) {
     if (m === 'GET' && p === '/demandes') return await demandes(req, env);
     const r = DEMANDE_RX.exec(p);
     if (m === 'POST' && r) return await ({ renvoyer: renvoyer, annuler: annuler, valider: valider, regler: regler, rouvrir: rouvrir })[r[2]](req, env, outils, r[1]);
-    if (m === 'POST' && p === '/retour') return await retour(req, env);
+    if (m === 'GET' && p === '/push/cle') return await pushCle(req, env);
+    if (m === 'POST' && (p === '/push/abonner' || p === '/push/desabonner')) return await pushAbonner(req, env, p === '/push/desabonner');
+    if (m === 'POST' && p === '/retour') return await retour(req, env, outils);
     if (m === 'GET' && p === '/etat') return await etat(req, env);
     if (m === 'POST' && p === '/etat') return await changerEtat(req, env);
     if ((m === 'GET' || m === 'POST') && p === '/routine') return await routine(req, env);

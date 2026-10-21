@@ -2047,3 +2047,78 @@ test('les états et les actions (pur) : libellés, à traiter, « Renvoyer » ap
   assert.deepEqual(C.actionsDemande({ etat: 'en_ligne', annulation: { depot: 'o/r', commits: ['abcdef1'] }, projet: 'home' }, 0), ['annuler']);
   assert.deepEqual(C.prsDe(['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/1/files', 'https://gitlab.com/o/r/pull/1', 42]), ['https://github.com/o/r/pull/1']);
 });
+
+// --- Notifications push ---
+import * as P from '../relay/push.mjs';
+async function navigateurFactice() {
+  const paire = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const auth = crypto.getRandomValues(new Uint8Array(16));
+  const pub = new Uint8Array(await crypto.subtle.exportKey('raw', paire.publicKey));
+  return { paire, auth, abonnement: { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: P.b64u(pub), auth: P.b64u(auth) } } };
+}
+// Déchiffre comme le navigateur (RFC 8291) pour prouver que le corps est lisible.
+async function dechiffrer(nav, corps) {
+  const sel = corps.slice(0, 16), lg = corps[20], asPub = corps.slice(21, 21 + lg), chiffre = corps.slice(21 + lg);
+  const enc = new TextEncoder(), cat = (...l) => Uint8Array.from(l.flatMap((x) => [...x]));
+  const hk = async (s, k, i, n) => new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: s, info: i }, await crypto.subtle.importKey('raw', k, 'HKDF', false, ['deriveBits']), n * 8));
+  const asCle = await crypto.subtle.importKey('raw', asPub, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const partage = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: asCle }, nav.paire.privateKey, 256));
+  const uaPub = new Uint8Array(await crypto.subtle.exportKey('raw', nav.paire.publicKey));
+  const ikm = await hk(nav.auth, partage, cat(enc.encode('WebPush: info\0'), uaPub, asPub), 32);
+  const cek = await hk(sel, ikm, enc.encode('Content-Encoding: aes128gcm\0'), 16), nonce = await hk(sel, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
+  const clair = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['decrypt']), chiffre));
+  assert.equal(clair[clair.length - 1], 2);
+  return new TextDecoder().decode(clair.slice(0, -1));
+}
+
+test('push : le message chiffré se déchiffre côté navigateur, l’en-tête VAPID est une signature valide', async () => {
+  const nav = await navigateurFactice();
+  const k = await P.nouvellesClesVapid();
+  let vu;
+  const r = await P.envoyer(nav.abonnement, { titre: 'Réglé', texte: 'ça marche é' }, { sujet: 'https://770lab.com/atelier/', publique: k.publique, privee: k.privee,
+    fetch: async (url, init) => { vu = { url, init }; return { status: 201 }; } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(JSON.parse(await dechiffrer(nav, vu.init.body)), { titre: 'Réglé', texte: 'ça marche é' });
+  const m = /^vapid t=([^.]+)\.([^.]+)\.([^,]+), k=(.+)$/.exec(vu.init.headers.Authorization);
+  assert.equal(m[4], k.publique);
+  const cle = await crypto.subtle.importKey('raw', P.deB64u(k.publique), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  assert.equal(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, cle, P.deB64u(m[3]), new TextEncoder().encode(m[1] + '.' + m[2])), true);
+  assert.equal(JSON.parse(new TextDecoder().decode(P.deB64u(m[2]))).aud, 'https://fcm.googleapis.com');
+});
+
+test('push : un abonnement vers une adresse quelconque est refusé', async () => {
+  const nav = await navigateurFactice();
+  assert.ok(P.abonnementValide(nav.abonnement));
+  assert.equal(P.abonnementValide(Object.assign({}, nav.abonnement, { endpoint: 'https://pirate.fr/x' })), null);
+  assert.equal(P.abonnementValide(Object.assign({}, nav.abonnement, { endpoint: 'http://fcm.googleapis.com/x' })), null);
+});
+
+test('push : s’abonner puis recevoir une notification à chaque retour de la routine ; un abonnement mort est retiré', async () => {
+  const k = await P.nouvellesClesVapid();
+  const env = Object.assign(env0(), { VAPID_PUBLIC: k.publique, VAPID_PRIVEE: k.privee });
+  const nav = await navigateurFactice();
+  const ent = { 'Content-Type': 'application/json', Origin: ORIGINE, 'X-Signaler-Cle': CLE_MARIE };
+  let r = await routeur(new Request(BASE + '/push/cle', { headers: { Origin: ORIGINE } }), env);
+  assert.deepEqual([(await r.json()).pret, r.status], [true, 200]);
+  r = await routeur(new Request(BASE + '/push/abonner', { method: 'POST', headers: ent, body: JSON.stringify({ abonnement: nav.abonnement }) }), env);
+  assert.equal(r.status, 200);
+  r = await routeur(new Request(BASE + '/push/abonner', { method: 'POST', headers: Object.assign({}, ent, { 'X-Signaler-Cle': 'fausse-cle-0123456789' }), body: JSON.stringify({ abonnement: nav.abonnement }) }), env);
+  assert.equal(r.status, 401);
+  const f = routine();
+  r = await signaler(requete(signalement()), env, f);
+  const ref = (await r.json()).ref;
+  const corpsRetour = JSON.parse(f.appels[0].corps.text.match(/-d '(\{.*\})'/)[1]);
+  const envoyes = [];
+  const sortie = { fetch: async (url, init) => { envoyes.push({ url, init }); return { status: envoyes.length > 1 ? 410 : 201 }; } };
+  const retourner = (etat) => routeur(new Request(BASE + '/retour', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: corpsRetour.id, cle: corpsRetour.cle, etat, resume: 'Le bouton marche.', liens: [] }) }), env, sortie);
+  assert.equal((await retourner('a_valider')).status, 200);
+  assert.equal(envoyes.length, 1);
+  const msg = JSON.parse(await dechiffrer(nav, envoyes[0].init.body));
+  assert.equal(msg.titre, 'À valider');
+  assert.match(msg.url, /atelier\/#/);
+  assert.equal((await retourner('en_ligne')).status, 200, 'le retour est enregistré même si le service de push répond 410');
+  assert.equal(await env.PIECES.get('push:marie').then((o) => JSON.parse(o.body)).then((l) => l.length), 0, 'abonnement mort retiré');
+  for (const e of ['question', 'echec', 'rien', 'a_relire', 'annulee']) assert.ok(P.ETATS_NOTIFIES.includes(e));
+  assert.ok(ref);
+});
