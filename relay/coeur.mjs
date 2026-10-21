@@ -509,6 +509,10 @@ export function nouvelleDemande(o) {
   const s = o.s, c = s.contexte;
   const d = { id: o.id, creeLeMs: o.quand, majLeMs: o.quand, qui: o.qui, type: s.type, texte: s.texte,
     page: { url: c.url, titre: c.titre }, projet: projetDeLaPage(c.url), captures: s.captures.length, audio: !!s.audio, etat: 'envoyee' };
+  // Les adresses des captures (GET /piece/<id> : 128 bits, impossibles à deviner, les mêmes que celles de la routine) : l'Atelier
+  // 770LAB les montre en vignettes dans la conversation, comme l'Atelier de gestion (21/10/2026). `o.pieces` : celles de signaler.
+  const urls = (o.pieces || []).filter((p) => p && p.genre === 'image' && typeof p.url === 'string').map((p) => p.url).slice(0, LIMITES.captures);
+  if (urls.length) d.capturesUrls = urls;
   return apresEnvoi(d, o.r, o);
 }
 
@@ -591,7 +595,7 @@ export function actionsDemande(d, maintenant) {
 // de la demande, ou, pour une demande rangée avant les projets, celui de l'adresse de sa page (absent : aucun projet).
 // « actions » (seulement s'il y en a) : actionsDemande.
 const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'envoyeLeMs', 'qui', 'type', 'texte', 'page', 'projet', 'captures', 'audio', 'etat', 'erreur',
-  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs', 'averifierLeMs'];
+  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs', 'averifierLeMs', 'capturesUrls'];
 export function demandePublique(d, o) {
   const x = {};
   CHAMPS_PUBLICS.forEach((k) => { if (d && d[k] !== undefined && d[k] !== null) x[k] = d[k]; });

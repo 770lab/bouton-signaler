@@ -264,7 +264,7 @@ export async function signaler(req, env, outils) {
   if (st) {
     // Une demande qui ne se range pas (quota du stockage…) ne change rien à la réponse : la routine, elle, a été prévenue ou non.
     try {
-      await ecrireDemande(st, C.nouvelleDemande({ id: ref, qui: a.qui, s: s, quand: quand, r: r, retourHash: await C.sha256Hex(jeton), texteRoutine: texte, mode: mode }));
+      await ecrireDemande(st, C.nouvelleDemande({ id: ref, qui: a.qui, s: s, quand: quand, r: r, retourHash: await C.sha256Hex(jeton), texteRoutine: texte, mode: mode, pieces: pieces }));
       await st.ecrireTexte(C.cleIndex(a.qui), JSON.stringify(C.indexAvec(await lireIndex(st, a.qui), ref)));
       demande = true;
     } catch (e) { demande = false; }

@@ -417,6 +417,22 @@ test('GET /demandes : les miennes seulement, la plus récente d’abord, 20 au p
   assert.deepEqual(await (await appel(sans, null, 'GET', '/demandes')).json(), { ok: true, demandes: [], stockage: false });
 });
 
+test('GET /demandes : les adresses des captures (les vignettes de l’Atelier, comme celui de gestion), les mêmes que celles de la routine', async () => {
+  const env = envKv(), R = routine();
+  const a = await envoyer(env, R);
+  const d = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === a.ref);
+  assert.equal(d.captures, 1); assert.equal(d.capturesUrls.length, 1);
+  assert.match(d.capturesUrls[0], /^https:\/\/[^/]+\/piece\/[0-9a-f]{32}$/);
+  assert.ok(R.appels[0].corps.text.includes(d.capturesUrls[0]), 'la même adresse que dans le texte de la routine');
+  const piece = await worker.fetch(new Request(d.capturesUrls[0]), env);
+  assert.equal(piece.status, 200); assert.equal(piece.headers.get('Content-Type'), 'image/png');
+  const b = await envoyer(env, R, {}, { captures: [], texte: 'Sans capture' });
+  const db = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === b.ref);
+  assert.equal(db.captures, 0); assert.equal('capturesUrls' in db, false, 'sans capture : pas de champ');
+  const paul = await (await appel(env, null, 'GET', '/demandes', { cle: CLE_PAUL })).json();
+  assert.ok(!JSON.stringify(paul).includes(d.capturesUrls[0]), 'jamais chez un autre');
+});
+
 test('POST /retour : jeton juste = état mis à jour ; mauvais jeton et réf. inconnue = le même 403 ; plusieurs retours de suite', async () => {
   const env = envKv(), R = routine();
   const a = await envoyer(env, R), b = await envoyer(env, R);
