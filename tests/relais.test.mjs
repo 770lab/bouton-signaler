@@ -1944,6 +1944,48 @@ test('les abonnements (pur) : ordre, indisponibilités (429 jusqu’à Retry-Aft
   assert.ok(!JSON.stringify(C.vueRoutine(null, abos, 0)).includes('sk-ant') && !JSON.stringify(C.vueRoutine(null, abos, 0)).includes('trig_'), 'ni jeton ni adresse');
 });
 
+test('le forfait des deux Claude (comme gescom) : en auto, Claude 2 dès que Claude 1 est à 95 % au dernier relevé ; un choix à la main jusqu’à une heure', async () => {
+  const abos = C.abonnementsDe({ ROUTINE_URL: ROUTINE, ROUTINE_JETON: 'a', ROUTINE_URL_2: ROUTINE_2, ROUTINE_JETON_2: 'b' });
+  const ids = (l) => l.map((a) => a.id), t = 1760000000000, H = 3600e3;
+  const rel = (c, h5, j7, o) => Object.assign({ compte: c, at: t, h5: h5, h5Fin: t + H, j7: j7, j7Fin: t + 72 * H }, o || {});
+  assert.deepEqual(ids(C.ordreAbonnements(null, abos, t, { 1: C.lireReleve(rel(1, 0.2, 0.5), 1) })), ['1', '2'], 'Claude 1 à 50 % : lui');
+  assert.deepEqual(ids(C.ordreAbonnements(null, abos, t, { 1: C.lireReleve(rel(1, 0.96, 0.5), 1) })), ['2', '1'], 'Claude 1 à 96 % (5 h) : Claude 2 d’abord');
+  assert.deepEqual(ids(C.ordreAbonnements(null, abos, t + 2 * H, { 1: C.lireReleve(rel(1, 0.96, 0.5), 1) })), ['1', '2'], 'sa fenêtre de 5 h remise à zéro : Claude 1');
+  assert.deepEqual(ids(C.ordreAbonnements(null, abos, t, { 1: C.lireReleve(rel(1, 0.5, 1), 1), 2: C.lireReleve(rel(2, 0.97, 0.2), 2) })), ['2', '1'],
+    'les deux à 95 % : celui qui se libère le premier (Claude 1 dans 72 h, Claude 2 dans 1 h)');
+  assert.deepEqual(ids(C.ordreAbonnements({ choix: '1' }, abos, t, { 1: C.lireReleve(rel(1, 1, 1), 1) })), ['1', '2'], 'choisi à la main : le relevé n’y change rien');
+  assert.deepEqual(ids(C.ordreAbonnements({ choix: '2', jusqua: t + H }, abos, t + 2 * H, {})), ['1', '2'], 'à la main jusqu’à une heure passée : auto');
+  assert.equal(C.lireReleve('{"compte":2,"at":1760000000,"h5":0.3}', 2).at, 1760000000000, 'secondes → millisecondes');
+  assert.equal(C.lireReleve({ compte: 1, at: t }, 2), null, 'pas le bon compte');
+  assert.equal(C.releveDoc({ fields: { json: { stringValue: JSON.stringify(rel(1, 0.4, 0.1)) }, at: { integerValue: String(t) } } }, 1).h5, 0.4, 'le document Firestore (API REST)');
+  assert.equal(C.plusRecent(C.lireReleve(rel(1, 0.1, 0.1), 1), C.lireReleve(rel(1, 0.9, 0.1, { at: t + 1 }), 1)).h5, 0.9);
+  assert.equal(C.vueRoutine({ choix: '2', jusqua: t + H }, abos, t).jusqua, t + H);
+  assert.equal(C.vueRoutine({ choix: '2', jusqua: t + H }, abos, t + 2 * H).choix, 'auto', 'la vue dit le choix qui vaut');
+  assert.equal(C.changerChoixRoutine(null, '2', 'marie', t, t + H).jusqua, t + H);
+  assert.equal('jusqua' in C.changerChoixRoutine(null, '2', 'marie', t, t + 9 * 24 * H), false, 'plus de 8 jours : pas gardé');
+  assert.equal('jusqua' in C.changerChoixRoutine(null, 'auto', 'marie', t, t + H), false);
+
+  // De bout en bout : le relais lit les relevés (le document public du CRM, le fichier du site) ; Claude 1 à 97 % → Claude 2.
+  const lus = [], plein = rel(1, 0.97, 0.4, { at: Date.now(), h5Fin: Date.now() + H, j7Fin: Date.now() + 72 * H });
+  const conso = async (url) => {
+    lus.push(url);
+    if (url === C.URL_CONSO_DOC(1)) return { ok: true, json: async () => ({ fields: { json: { stringValue: JSON.stringify(plein) } } }) };
+    return { ok: false, json: async () => ({}) };
+  };
+  const W = await import('../relay/cloudflare/worker.mjs'); W._oublierConso();
+  const env = envDeux(), R = routine(); R.conso = conso;
+  const j = await envoyer(env, R);
+  assert.equal(j.ok, true); assert.deepEqual(R.appels.map((x) => x.url), [ROUTINE_2], 'Claude 1 à 97 % au relevé de l’iMac : Claude 2');
+  assert.ok(lus.includes(C.URL_CONSO_DOC(1)) && lus.includes(C.URL_CONSO_FICHIER(2)));
+  // Choisi à la main « Claude 1 » jusqu'à dans une heure : Claude 1, sans lire les relevés.
+  let rep = await appel(env, null, 'POST', '/routine', { corps: { choix: '1', jusqua: Date.now() + H } });
+  const v = await rep.json();
+  assert.equal(rep.status, 200); assert.equal(v.choix, '1'); assert.ok(v.jusqua > Date.now());
+  W._oublierConso(); lus.length = 0;
+  await envoyer(env, R);
+  assert.equal(R.appels[R.appels.length - 1].url, ROUTINE); assert.equal(lus.length, 0);
+});
+
 test('deux abonnements de bout en bout : 429 sur le 1 → le 2 aussitôt, le 1 sauté ensuite ; refus 401 → 6 h ; 503 rejoué puis l’autre ; coupure : on s’arrête', async () => {
   let env = envDeux(), R = routine([{ status: 429, entetes: { 'Retry-After': '600' }, json: { error: { type: 'rate_limit_error', message: 'plus de crédit' } } }]);
   const avant = Date.now();

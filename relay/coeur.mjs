@@ -347,7 +347,13 @@ export const messageRoutine = (r) => propre(r.coupe ? 'le relais n’est pas enc
 // est noté indisponible (sauf s'ils le sont tous), et passe à l'autre aussitôt quand l'un refuse : 429 → indisponible jusqu'à
 // Retry-After (1 h sans), 4xx → 6 h, avec la raison ; 500/503/529 → un second essai, puis l'autre. Une coupure réseau ou une autre
 // réponse (502, 504…) : on ne sait pas si la session existe, on s'arrête là (jamais deux sessions pour une demande).
-// L'état « routine » (rangé sans fin) : { choix: 'auto'|'1'|'2', depuis, par, indispo: { '1'|'2': { jusqua, raison } } }.
+// L'état « routine » (rangé sans fin) : { choix: 'auto'|'1'|'2', depuis, par, jusqua, indispo: { '1'|'2': { jusqua, raison } } }.
+// LE FORFAIT DES DEUX CLAUDE (21/10/2026, l'Atelier 770LAB aligné sur celui de gestion : gescom docs/claude-comptes-regles.js, choisir).
+// « auto » : Claude 1 (abonnement 1) d'abord, Claude 2 dès que Claude 1 atteint 95 % d'une fenêtre (5 h ou semaine) au dernier relevé,
+// retour sur Claude 1 à sa remise à zéro ; les deux à 95 % ou plus : celui qui se libère le premier. Un choix à la main peut avoir une
+// fin (jusqua : la remise à zéro du Claude qu'on quitte, posée par le bouton « Basculer » de l'Atelier) ; passé cette heure, « auto ».
+// Les relevés (relevesConso, worker) : les documents publics crm174_archives/claudeConso<N> du CRM (l'iMac, toutes les 5 minutes) et
+// les fichiers claude-conso-<N>.json du site de gestion (écrits par une session) ; le plus récent compte. Sans relevé : comme avant.
 export const CLE_ROUTINE = 'routine';
 export const CHOIX_ROUTINE = Object.freeze(['auto', '1', '2']);
 export const INDISPO_429_MS = 3600 * 1000;
@@ -365,6 +371,7 @@ export function etatRoutine(x) {
   if (CHOIX_ROUTINE.includes(x.choix)) e.choix = x.choix;
   if (Number.isFinite(x.depuis)) e.depuis = x.depuis;
   if (x.par) e.par = propre(x.par, 60);
+  if (e.choix !== 'auto' && Number.isFinite(x.jusqua) && x.jusqua > 0) e.jusqua = x.jusqua;
   const i = x.indispo && typeof x.indispo === 'object' && !Array.isArray(x.indispo) ? x.indispo : {};
   ['1', '2'].forEach((id) => {
     const y = Object.prototype.hasOwnProperty.call(i, id) ? i[id] : null;
@@ -373,11 +380,47 @@ export function etatRoutine(x) {
   return e;
 }
 const indisponible = (e, id, maintenant) => !!(e.indispo[id] && e.indispo[id].jusqua > maintenant);
-// L'ordre d'essai : le choisi d'abord (« auto » : 1 puis 2), sans ceux qui ne sont pas réglés ; les indisponibles sautés, sauf s'ils
-// le sont tous (on les essaie alors quand même, dans l'ordre : l'indisponibilité a peut-être pris fin plus tôt).
-export function ordreAbonnements(etat, abos, maintenant) {
-  const e = etatRoutine(etat);
-  const liste = (e.choix === '2' ? ['2', '1'] : ['1', '2']).map((id) => (abos || []).find((a) => a.id === id && a.regle)).filter(Boolean);
+// Le choix qui vaut à cet instant : un choix à la main dont l'heure de fin est passée redevient « auto ».
+export const choixEffectif = (e, maintenant) => (e.choix !== 'auto' && e.jusqua && maintenant >= e.jusqua ? 'auto' : e.choix);
+
+export const SEUIL_AUTO = 0.95;
+export const URL_CONSO_DOC = (c) => 'https://firestore.googleapis.com/v1/projects/crm-174-live/databases/(default)/documents/crm174_archives/claudeConso' + c;
+export const URL_CONSO_FICHIER = (c) => 'https://gestion.artisansverts.energy/claude-conso-' + c + '.json';
+const enMs = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? (x < 1e11 ? x * 1000 : x) : 0; };
+const fraction = (u) => { const x = Number(u); return Number.isFinite(x) ? Math.min(Math.max(x, 0), 1.5) : 0; };
+// Un relevé (la forme de gescom, lireReleve) → { compte, at, h5, h5Fin, j7, j7Fin }, ou null. `brut` : objet ou texte JSON.
+export function lireReleve(brut, c) {
+  let r = brut;
+  if (typeof r === 'string') { try { r = JSON.parse(r); } catch (e) { return null; } }
+  if (!r || typeof r !== 'object' || Number(r.compte) !== c || !enMs(r.at)) return null;
+  return { compte: c, at: enMs(r.at), h5: fraction(r.h5), h5Fin: enMs(r.h5Fin), j7: fraction(r.j7), j7Fin: enMs(r.j7Fin) };
+}
+// Le document Firestore (API REST) crm174_archives/claudeConso<N> → son relevé (champ `json`), ou null.
+export const releveDoc = (doc, c) => lireReleve(doc && doc.fields && doc.fields.json && doc.fields.json.stringValue, c);
+export const plusRecent = (a, b) => (!a ? (b || null) : (!b ? a : (b.at > a.at ? b : a)));
+// La fenêtre la plus chargée d'un relevé à l'instant t (une fenêtre remise à zéro repart de 0) : { u, fin }.
+export function chargeConso(rel, t) {
+  if (!rel) return { u: 0, fin: 0, connu: false };
+  let u = 0, fin = 0;
+  [['h5', 'h5Fin'], ['j7', 'j7Fin']].forEach(([k, kf]) => {
+    const f = rel[kf], x = f && t >= f ? 0 : rel[k];
+    if (x > u || (x === u && f > fin)) { u = x; fin = x ? f : fin; }
+  });
+  return { u: u, fin: fin, connu: true };
+}
+// En « auto », qui passe en premier : '1' tant que Claude 1 est sous 95 % ; sinon '2' s'il l'est ; les deux à 95 % : le premier libéré.
+export function compteAuto(releves, t) {
+  const r = releves || {}, n1 = chargeConso(r[1], t), n2 = chargeConso(r[2], t);
+  if (n1.u < SEUIL_AUTO) return '1';
+  if (n2.u < SEUIL_AUTO) return '2';
+  return n2.fin && (!n1.fin || n2.fin < n1.fin) ? '2' : '1';
+}
+// L'ordre d'essai : le choisi d'abord (« auto » : 1 puis 2, ou 2 puis 1 quand Claude 1 est à 95 % au dernier relevé), sans ceux qui ne
+// sont pas réglés ; les indisponibles sautés, sauf s'ils le sont tous (on les essaie alors quand même, dans l'ordre : l'indisponibilité
+// a peut-être pris fin plus tôt). `releves` : { 1, 2 } (facultatif).
+export function ordreAbonnements(etat, abos, maintenant, releves) {
+  const e = etatRoutine(etat), ch = choixEffectif(e, maintenant), premier = ch === 'auto' ? compteAuto(releves, maintenant) : ch;
+  const liste = (premier === '2' ? ['2', '1'] : ['1', '2']).map((id) => (abos || []).find((a) => a.id === id && a.regle)).filter(Boolean);
   const dispo = liste.filter((a) => !indisponible(e, a.id, maintenant));
   return dispo.length ? dispo : liste;
 }
@@ -420,14 +463,17 @@ export async function prevenirAbonnements(o) {
 }
 // GET /routine : le choix et chaque abonnement (réglé ou non, indisponible jusqu'à quand et pourquoi). Jamais l'adresse ni le jeton.
 export function vueRoutine(etat, abos, maintenant) {
-  const e = etatRoutine(etat);
-  return { ok: true, choix: e.choix, depuis: e.depuis, par: e.par, abonnements: (abos || []).map((a) => {
+  const e = etatRoutine(etat), ch = choixEffectif(e, maintenant);
+  const v = { ok: true, choix: ch, depuis: e.depuis, par: e.par };
+  if (ch !== 'auto' && e.jusqua) v.jusqua = e.jusqua;
+  return Object.assign(v, { abonnements: (abos || []).map((a) => {
     const x = { id: a.id, nom: a.nom, regle: a.regle };
     if (a.regle && indisponible(e, a.id, maintenant)) x.indispo = { jusqua: e.indispo[a.id].jusqua, raison: e.indispo[a.id].raison };
     return x;
-  }) };
+  }) });
 }
-// Corps de POST /routine : { choix: 'auto' | '1' | '2' } ; un abonnement non réglé ne se choisit pas.
+// Corps de POST /routine : { choix: 'auto' | '1' | '2', jusqua? (ms : la fin d'un choix à la main) } ; un abonnement non réglé ne se
+// choisit pas.
 export function lireChoixRoutine(corps, abos) {
   if (!corps || typeof corps !== 'object' || Array.isArray(corps) || !CHOIX_ROUTINE.includes(corps.choix))
     return { ok: false, erreur: 'choix illisible : {"choix": "auto"}, {"choix": "1"} ou {"choix": "2"}' };
@@ -435,11 +481,18 @@ export function lireChoixRoutine(corps, abos) {
     const sfx = corps.choix === '2' ? '_2' : '';
     return { ok: false, erreur: 'l’abonnement ' + corps.choix + ' n’est pas réglé (ROUTINE_URL' + sfx + ' / ROUTINE_JETON' + sfx + ')' };
   }
-  return { ok: true, choix: corps.choix };
+  const v = { ok: true, choix: corps.choix };
+  if (corps.choix !== 'auto' && Number.isFinite(corps.jusqua) && corps.jusqua > 0) v.jusqua = corps.jusqua;
+  return v;
 }
 // Changer le choix efface les indisponibilités notées : le propriétaire qui choisit (après avoir rechargé ses crédits…) veut
-// qu'on réessaie tout de suite.
-export const changerChoixRoutine = (etat, choix, qui, quand) => ({ choix: choix, depuis: quand, par: propre(qui, 60) || null, indispo: {} });
+// qu'on réessaie tout de suite. Une fin (jusqua) n'est gardée que dans les 8 jours qui viennent (la semaine d'un forfait).
+export const JUSQUA_MAX_MS = 8 * 24 * 3600 * 1000;
+export function changerChoixRoutine(etat, choix, qui, quand, jusqua) {
+  const e = { choix: choix, depuis: quand, par: propre(qui, 60) || null, indispo: {} };
+  if (choix !== 'auto' && jusqua > quand && jusqua - quand <= JUSQUA_MAX_MS) e.jusqua = jusqua;
+  return e;
+}
 
 // LES DEMANDES (« Mes demandes » du bouton). Rangées sous « demande:<réf> » ; la liste de chaque personne sous « demandes:<nom> »
 // (les 50 dernières réfs, la plus récente d'abord) ; les interrupteurs du pupitre (général et par projet) sous « etat ».

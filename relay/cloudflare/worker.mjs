@@ -188,6 +188,27 @@ async function petitCorps(req, max, videPermis) {
   return { corps: c };
 }
 
+// LES RELEVÉS DU FORFAIT DES DEUX CLAUDE (21/10/2026, coeur.mjs « Le forfait des deux Claude ») : le document public du CRM (l'iMac) et
+// le fichier du site de gestion, le plus récent compte. 1,5 s au plus, gardés une minute ; une panne vaut « pas de relevé » (comme avant).
+// `outils.conso` : le fetch qui les lit (celui du Worker en ligne ; absent dans les tests, qui le fournissent quand ils en ont besoin).
+let consoGarde = null;
+async function relevesConso(outils) {
+  const f = outils && outils.conso;
+  if (!f) return {};
+  if (consoGarde && Date.now() - consoGarde.at < 60000) return consoGarde.r;
+  const lire = async (url) => {
+    try { const rep = await f(url, { signal: AbortSignal.timeout(1500) }); return rep && rep.ok ? await rep.json() : null; } catch (e) { return null; }
+  };
+  const r = {};
+  await Promise.all([1, 2].map(async (c) => {
+    const [doc, fichier] = await Promise.all([lire(C.URL_CONSO_DOC(c)), lire(C.URL_CONSO_FICHIER(c))]);
+    r[c] = C.plusRecent(C.releveDoc(doc, c), C.lireReleve(fichier, c));
+  }));
+  consoGarde = { at: Date.now(), r: r };
+  return r;
+}
+export const _oublierConso = () => { consoGarde = null; };
+
 // Prévenir la routine : les abonnements dans l'ordre (C.ordreAbonnements), ou celui imposé par « Renvoyer sur l'autre abonnement ».
 // Les indisponibilités notées sont rangées sous « routine » (seulement si elles ont changé). Rend la réponse (avec `abonnement`).
 async function prevenir(env, st, outils, texte, impose) {
@@ -195,7 +216,9 @@ async function prevenir(env, st, outils, texte, impose) {
   const abos = C.abonnementsDe(env);
   let avant = C.etatRoutine(null);
   if (st) { try { avant = C.etatRoutine(lireJson(await st.lireTexte(C.CLE_ROUTINE))); } catch (e) { /* lu comme vide */ } }
-  const liste = impose ? C.abonnementImpose(abos, impose) : C.ordreAbonnements(avant, abos, Date.now());
+  const deux = abos.filter((a) => a.regle).length > 1, auto = C.choixEffectif(avant, Date.now()) === 'auto';
+  const releves = !impose && deux && auto ? await relevesConso(outils) : {};
+  const liste = impose ? C.abonnementImpose(abos, impose) : C.ordreAbonnements(avant, abos, Date.now(), releves);
   const x = await C.prevenirAbonnements({ liste: liste, etat: avant, texte: texte, fetch: outils.fetch, attendre: outils.attendre,
     prefixer: abos.filter((a) => a.regle).length > 1 });
   if (st && JSON.stringify(x.etat) !== JSON.stringify(avant)) { try { await st.ecrireTexte(C.CLE_ROUTINE, JSON.stringify(x.etat)); } catch (e) { /* tant pis */ } }
@@ -519,7 +542,7 @@ export async function routine(req, env) {
   const b = await petitCorps(req, C.LIMITES.etatOctets);
   const v = b.corps !== undefined ? C.lireChoixRoutine(b.corps, abos) : { ok: false, erreur: b.trop ? 'réglage trop lourd' : 'réglage illisible' };
   if (!v.ok) return json({ ok: false, erreur: v.erreur }, 400, cors);
-  const e = C.changerChoixRoutine(lu, v.choix, a.qui, Date.now());
+  const e = C.changerChoixRoutine(lu, v.choix, a.qui, Date.now(), v.jusqua);
   await st.ecrireTexte(C.CLE_ROUTINE, JSON.stringify(e));
   console.log('[routine]', JSON.stringify({ choix: v.choix, qui: a.qui }));
   return json(C.vueRoutine(e, abos, Date.now()), 200, cors);
@@ -748,5 +771,5 @@ export async function routeur(req, env, outils) {
 }
 
 export default {
-  fetch(req, env) { return routeur(req, env); },
+  fetch(req, env) { return routeur(req, env, { conso: (url, init) => fetch(url, init) }); },
 };
