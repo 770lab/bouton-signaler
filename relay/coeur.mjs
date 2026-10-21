@@ -582,7 +582,7 @@ export function peutRenvoyer(d, maintenant) {
 // pour annuler), 'valider' (à valider, avec sa PR ; jamais Avinou Malkenou : son propriétaire le met en ligne depuis son Mac),
 // 'renvoyer' (peutRenvoyer).
 export function actionsDemande(d, maintenant) {
-  if (!d || typeof d !== 'object') return [];
+  if (!d || typeof d !== 'object' || d.externe) return [];   // une demande d'ailleurs (KOULAM) se traite dans sa bulle
   const projet = projetDeLaDemande(d), a = [];
   if (d.etat === 'en_ligne' && d.annulation && projet !== 'avinou') a.push('annuler');
   if (d.etat === 'a_valider' && projet !== 'avinou' && prsDe(d.liens).length) a.push('valider');
@@ -595,7 +595,7 @@ export function actionsDemande(d, maintenant) {
 // de la demande, ou, pour une demande rangée avant les projets, celui de l'adresse de sa page (absent : aucun projet).
 // « actions » (seulement s'il y en a) : actionsDemande.
 const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'envoyeLeMs', 'qui', 'type', 'texte', 'page', 'projet', 'captures', 'audio', 'etat', 'erreur',
-  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs', 'averifierLeMs', 'capturesUrls'];
+  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs', 'averifierLeMs', 'capturesUrls', 'externe'];
 export function demandePublique(d, o) {
   const x = {};
   CHAMPS_PUBLICS.forEach((k) => { if (d && d[k] !== undefined && d[k] !== null) x[k] = d[k]; });
@@ -688,6 +688,55 @@ export function lireRetour(corps) {
   }
   if (corps.apercu !== undefined && corps.apercu !== null) { const l = liensPropres([corps.apercu]); if (l.length) r.apercu = l[0]; }
   return { ok: true, r: r };
+}
+
+// ——— LES DEMANDES D'AILLEURS (21/10/2026, le propriétaire : « je viens de demander une répa sur Studio […] et je ne vois pas cette
+// nouvelle demande dans l'Atelier 770LAB ») ———
+// KOULAM a sa bulle « Modifier avec Claude », son serveur et sa routine ; son serveur (770lab/koulam, functions/claude-retouche-relais.js)
+// envoie ici une COPIE de chaque demande et de ses nouvelles (POST /externe, Authorization: Bearer <secret EXTERNE_JETON>). Le relais ne la
+// lance jamais chez Claude : aucun geste (renvoyer, annuler, valider : actionsDemande), seulement les marques « Réglé » et « À vérifier ».
+// Rangées sous « demandes:@externe » (50 au plus), vues par toute personne connectée au relais (l'équipe de 770lab).
+export const CLE_INDEX_EXTERNE = 'demandes:@externe';
+export const QUI_EXTERNE = '@externe';
+export const PROJETS_EXTERNES = Object.freeze(['koulam']);
+const ETATS_EXTERNES = ['envoyee', 'pas_partie', 'en_ligne', 'question', 'echec', 'annulee', 'rien'];
+const REF_EXTERNE_RX = /^[A-Za-z0-9_-]{6,60}$/;
+const IMAGE_EXTERNE_RX = /^https:\/\/firebasestorage\.googleapis\.com\/[^\s"'<>]{10,1500}$/;
+const LIEN_EXTERNE_RX = /^https:\/\/(github\.com\/770lab\/|claude\.ai\/)[^\s"'<>]{1,500}$/;
+const PAGE_EXTERNE_RX = /^https:\/\/(770lab\.com|koulam\.app|chabapp-5fc3b\.firebaseapp\.com)(\/[^\s"'<>]{0,300})?$/;
+// Deux textes égaux, sans que le temps de la comparaison dise où ils diffèrent (le jeton partagé).
+export function memeJeton(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (!a || a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+// La réf du relais d'une demande d'ailleurs (12 hexadécimaux, toujours la même pour la même demande).
+export const idExterne = async (projet, ref) => (await sha256Hex('externe:' + projet + ':' + ref)).slice(0, 12);
+// Le corps de POST /externe, remis au propre, fusionné avec la copie d'avant (les marques « Réglé » / « À vérifier » restent).
+// → { ok: true, demande } ou { ok: false, erreur }.
+export async function lireExterne(corps, avant, quand) {
+  const c = corps && typeof corps === 'object' && !Array.isArray(corps) ? corps : null;
+  if (!c || !PROJETS_EXTERNES.includes(c.projet) || !REF_EXTERNE_RX.test(String(c.ref || ''))) return { ok: false, erreur: 'demande d’ailleurs illisible : { projet, ref, … }' };
+  const id = await idExterne(c.projet, c.ref), a = avant && typeof avant === 'object' ? avant : {};
+  const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : 0);
+  const page = c.page && typeof c.page === 'object' && PAGE_EXTERNE_RX.test(String(c.page.url || '')) ? { url: String(c.page.url), titre: propre(c.page.titre, 80) } : null;
+  const images = {};
+  ['avant', 'apres'].forEach((k) => { const u = c.images && c.images[k]; if (IMAGE_EXTERNE_RX.test(String(u || ''))) images[k] = String(u); });
+  const d = {
+    id: id, qui: QUI_EXTERNE, externe: c.projet, refExterne: String(c.ref), projet: c.projet, type: 'bug',
+    creeLeMs: num(a.creeLeMs) || num(c.creeLeMs) || quand, majLeMs: num(c.majLeMs) || quand,
+    texte: propre(c.texte, 1500), etat: ETATS_EXTERNES.includes(c.etat) ? c.etat : 'envoyee', resume: propre(c.resume, 600), erreur: propre(c.erreur, 300),
+    liens: (Array.isArray(c.liens) ? c.liens : []).filter((u) => LIEN_EXTERNE_RX.test(String(u))).slice(0, 6), captures: Math.min(num(c.captures), 20),
+  };
+  if (page) d.page = page;
+  if (Object.keys(images).length) d.images = images;
+  if (LIEN_EXTERNE_RX.test(String(c.sessionUrl || '')) && /^https:\/\/claude\.ai\//.test(String(c.sessionUrl))) d.sessionUrl = String(c.sessionUrl);
+  if (/^[12]$/.test(String(c.abonnement || ''))) d.abonnement = String(c.abonnement);
+  if (num(a.regleeLeMs)) d.regleeLeMs = num(a.regleeLeMs);
+  if (num(a.averifierLeMs)) d.averifierLeMs = num(a.averifierLeMs);
+  return { ok: true, demande: d };
 }
 
 // LES PROJETS qui portent le bouton, dans l'ordre du pupitre (une ligne par projet, chacune avec son interrupteur).

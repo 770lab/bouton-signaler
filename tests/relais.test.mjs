@@ -1519,6 +1519,36 @@ test('POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l’
   assert.equal(C.apresEnvoi(C.regler({ id: a.ref, etat: 'en_ligne' }, 5), { ok: false }, { quand: 9, garder: true }).regleeLeMs, 5, 'pas repartie : marque gardée');
 });
 
+test('POST /externe : les demandes de la bulle KOULAM dans l’Atelier (une copie, jamais lancée chez Claude), vues de toute l’équipe', async () => {
+  const k = 'koulam-cle-partagee-0123456789abcdef', R = routine();
+  const ext = (env, corps, cle) => routeur(new Request(BASE + '/externe', { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, cle === null ? {} : { Authorization: 'Bearer ' + (cle || k) }), body: JSON.stringify(corps) }), env, R);
+  const corps = { projet: 'koulam', ref: 'Ab12Cd34Ef56', texte: 'Le bouton Publier ne réagit pas', etat: 'envoyee', creeLeMs: Date.now() - 60000, page: { url: 'https://770lab.com/studio/p/abc', titre: 'Studio' },
+    images: { avant: 'https://firebasestorage.googleapis.com/v0/b/k/o/a?alt=media&token=1', apres: 'https://pirate.fr/x.jpg' }, sessionUrl: 'https://claude.ai/code/session_01X', liens: ['https://github.com/770lab/koulam/commit/abc1234', 'https://pirate.fr'], captures: 2, abonnement: '2' };
+  assert.equal((await ext(envKv(), corps)).status, 503, 'sans le secret EXTERNE_JETON : pas branché');
+  const env = envKv({ EXTERNE_JETON: k });
+  assert.equal((await ext(env, corps, 'mauvaise-cle')).status, 403);
+  assert.equal((await ext(env, corps, null)).status, 403);
+  assert.equal((await ext(env, Object.assign({}, corps, { projet: 'home' }))).status, 400, 'seulement les projets d’ailleurs (KOULAM)');
+  let rep = await ext(env, corps);
+  const j = await rep.json();
+  assert.equal(rep.status, 200); assert.match(j.ref, /^[0-9a-f]{12}$/);
+  assert.equal(R.appels.length, 0, 'rien ne part chez Claude');
+  for (const cle of [CLE_MARIE, CLE_PAUL]) {
+    const d = (await (await appel(env, null, 'GET', '/demandes', { cle })).json()).demandes.find((x) => x.id === j.ref);
+    assert.ok(d, 'vue par ' + cle.slice(0, 4)); assert.equal(d.externe, 'koulam'); assert.equal(d.projet, 'koulam'); assert.equal(d.etat, 'envoyee');
+    assert.equal('actions' in d, false, 'aucun geste du relais');
+    assert.deepEqual(Object.keys(d.images), ['avant'], 'une image hors de Firebase Storage : écartée');
+    assert.deepEqual(d.liens, ['https://github.com/770lab/koulam/commit/abc1234']);
+  }
+  assert.equal((await appel(env, R, 'POST', '/demandes/' + j.ref + '/renvoyer')).status, 409, 'renvoyer : dans la bulle KOULAM');
+  assert.equal((await appel(env, R, 'POST', '/demandes/' + j.ref + '/verifier')).status, 200, '« À vérifier » : oui');
+  rep = await ext(env, Object.assign({}, corps, { etat: 'en_ligne', resume: 'Le bouton Publier marche.' }));
+  const d2 = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === j.ref);
+  assert.equal(d2.etat, 'en_ligne'); assert.equal(d2.resume, 'Le bouton Publier marche.'); assert.ok(Number(d2.averifierLeMs) > 0, 'les nouvelles de KOULAM gardent la marque');
+  const liste = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.filter((x) => x.id === j.ref);
+  assert.equal(liste.length, 1, 'une seule copie, mise à jour');
+});
+
 test('POST /demandes/<réf>/verifier · /deverifier : la marque « À vérifier » de l’Atelier, gardée par le relais ; la sienne seulement ; rien ne part chez Claude', async () => {
   const env = envKv(), R = routine();
   const a = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
