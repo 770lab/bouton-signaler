@@ -500,6 +500,10 @@ export function apresRetour(d, r, quand, images) {
 // (renvoyer, annuler, valider : apresEnvoi) n'est plus réglée.
 export function regler(d, quand) { return Object.assign({}, d, { regleeLeMs: quand }); }
 export function rouvrir(d) { const x = Object.assign({}, d); delete x.regleeLeMs; return x; }
+// « À vérifier » (21/10/2026, Yoann : « dans chaque conv rajoute un bouton à vérifier, comme ça je traite plus tard ») : une marque à soi,
+// sur tous ses appareils, comme « Réglé » ; elle reste quand la demande repart chez Claude (on l'enlève soi-même).
+export function verifier(d, quand) { return Object.assign({}, d, { averifierLeMs: quand }); }
+export function deverifier(d) { const x = Object.assign({}, d); delete x.averifierLeMs; return x; }
 
 // Les PR GitHub parmi les liens d'une demande (ce que VALIDER fusionne).
 const PR_RX = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}\/pull\/\d{1,7}\/?$/;
@@ -534,7 +538,7 @@ export function actionsDemande(d, maintenant) {
 // de la demande, ou, pour une demande rangée avant les projets, celui de l'adresse de sa page (absent : aucun projet).
 // « actions » (seulement s'il y en a) : actionsDemande.
 const CHAMPS_PUBLICS = ['id', 'creeLeMs', 'majLeMs', 'envoyeLeMs', 'qui', 'type', 'texte', 'page', 'projet', 'captures', 'audio', 'etat', 'erreur',
-  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs'];
+  'sessionUrl', 'resume', 'liens', 'mode', 'abonnement', 'images', 'apercu', 'annulation', 'regleeLeMs', 'averifierLeMs'];
 export function demandePublique(d, o) {
   const x = {};
   CHAMPS_PUBLICS.forEach((k) => { if (d && d[k] !== undefined && d[k] !== null) x[k] = d[k]; });
