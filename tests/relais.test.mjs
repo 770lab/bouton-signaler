@@ -1827,12 +1827,12 @@ test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CL
   assert.equal((await appel(sans, R, 'POST', '/signaler', { cle: j.cle, corps: signalement() })).status, 401);
 });
 
-// ——— Les appareils de confiance : une clé d'équipe volée inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne ———
+// ——— Les appareils de confiance : une clé d'équipe volée inscrit un appareil, jamais un appareil qui crée une clé ———
+// (Mettre en ligne : tout appareil inscrit, avec une session d'empreinte, depuis le choix du propriétaire du 2026-10-21.)
 
 const PAS_DE_CONFIANCE_CLE = { ok: false, confiance: true, erreur: 'Cet appareil a été ajouté avec la clé d’équipe seule : une nouvelle clé se crée avec l’empreinte d’un appareil de confiance (ton téléphone).' };
-const PAS_DE_CONFIANCE_VALIDER = { ok: false, confiance: true, erreur: 'cet appareil a été ajouté avec la clé d’équipe seule : mets en ligne avec l’empreinte d’un appareil de confiance (ton téléphone)' };
 
-test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne crée pas de clé et ne met pas en ligne, même après un changement de CLES au Terminal', async () => {
+test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne crée pas de clé, même après un changement de CLES au Terminal ; il met en ligne (choix du propriétaire)', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7), X = await appareil(-7);
   const AUTRE = 'Nv8kT3pQ6wZ1xR4m';
   const nouvelle = (s) => appel(env, null, 'POST', '/auth/cle/nouvelle', { origine: ORIGINE_770, cle: null, entetes: bearer(s), corps: {} });
@@ -1861,10 +1861,10 @@ test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne c
   assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_CLE);
   assert.equal(env.PIECES_KV.objets.has('cle:marie'), false, 'rien de rangé');
   assert.equal(await statut(CLE_MARIE), 200, 'la clé du propriétaire marche toujours');
-  // Mettre en ligne : refusé aussi, sans appeler la routine ; ce qui ne demande pas de confiance marche comme avant.
+  // Mettre en ligne : permis à tout appareil inscrit, de confiance ou non (choix du propriétaire, 2026-10-21 : « un système plus
+  // simple »). Ce qui ne demande pas de confiance marche comme avant.
   rep = await valider(cx.j.session);
-  assert.equal(rep.status, 403); assert.deepEqual(await rep.json(), PAS_DE_CONFIANCE_VALIDER);
-  assert.equal(R.appels.length, 1); assert.equal(lireDemande(env, dem.ref).etat, 'a_valider');
+  assert.equal(rep.status, 200, JSON.stringify(await rep.clone().json())); assert.equal(R.appels.length, 2);
   assert.equal((await appel(env, R, 'GET', '/demandes', { cle: null, entetes: bearer(cx.j.session) })).status, 200);
   // Un appareil ajouté avec la session d'un appareil PAS de confiance : pas de confiance non plus.
   const Y = await appareil(-7);
@@ -1885,14 +1885,11 @@ test('une clé volée : l’appareil qu’elle inscrit (empreinte fraîche) ne c
   assert.equal(cx2.rep.status, 200, 'toujours inscrit tant qu’on ne le retire pas');
   assert.equal((await nouvelle(cx2.j.session)).status, 403);
   assert.equal(await statut(AUTRE), 200, 'la clé du Terminal reste la seule valable'); assert.equal(await statut(CLE_MARIE), 401);
-  assert.equal((await valider(cx2.j.session)).status, 403);
-  // Le propriétaire, avec l'empreinte de son téléphone : sa nouvelle clé, et la mise en ligne.
+  // Le propriétaire, avec l'empreinte de son téléphone : sa nouvelle clé.
   const ca = await connecter(env, A);
   rep = await nouvelle(ca.j.session);
   const neuve = await rep.json();
   assert.equal(rep.status, 200, JSON.stringify(neuve)); assert.equal(await statut(neuve.cle), 200); assert.equal(await statut(AUTRE), 401);
-  rep = await valider(ca.j.session);
-  assert.equal(rep.status, 200, JSON.stringify(await rep.clone().json())); assert.equal(R.appels.length, 2);
   // Il retire les appareils inconnus (la marche à suivre après une fuite) : leurs sessions ne valent plus rien, tout de suite.
   for (const id of [X.id, Y.id]) assert.equal((await appel(env, null, 'POST', '/auth/appareils/' + id + '/retirer', { origine: ORIGINE_770, cle: null, entetes: bearer(ca.j.session), corps: {} })).status, 200);
   assert.equal((await appel(env, null, 'GET', '/demandes', { cle: null, entetes: bearer(cx2.j.session) })).status, 401);

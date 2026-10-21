@@ -1583,10 +1583,8 @@
       if (!fond) return;
       if (!r.ok) { el.disabled = false; dire(fond.querySelector('.sgn-etat'), r.msg, 'ko'); return; }
       EMP.offre = false;
-      // Ajouté avec la clé seule alors que la personne a déjà un appareil (« sur: false ») : il envoie, mais ne met pas en ligne.
-      var dit = r.appareil && r.appareil.sur === false
-        ? 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira pour envoyer. Il a été ajouté avec la clé d’équipe seule : pour mettre en ligne, l’empreinte de ton téléphone.'
-        : 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira.';
+      // Ajouté avec la clé seule ou non : il envoie et met en ligne (choix du propriétaire, 2026-10-21) ; seule « Nouvelle clé » le distingue.
+      var dit = 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira.';
       rendre(dit, 'ok');
       if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(dit, 'ok'); });
     });

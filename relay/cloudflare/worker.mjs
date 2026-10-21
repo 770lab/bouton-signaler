@@ -21,8 +21,8 @@
 //
 // Routes : POST /signaler · GET /piece/<id> (une capture, la note, une capture avant / après, sous une adresse de 128 bits)
 //          GET /demandes (les miennes) · POST /demandes/<réf>/renvoyer (pas partie, ou sans nouvelle depuis 15 min ; { abonnement })
-//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; connecté par l'empreinte, d'un
-//          appareil de confiance) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
+//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; connecté par l'empreinte, tout
+//          appareil inscrit) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, ses captures, de quoi annuler, avec son jeton)
 //          GET /etat[?projet=<id>] · POST /etat (interrupteurs et mode de chaque projet) · GET / POST /routine (les abonnements)
 //          /auth/… (la connexion par empreinte : options/inscription, inscription, options/connexion, connexion, appareils,
@@ -31,7 +31,8 @@
 // « Ma clé ou ma session » : chaque route qui accepte la clé d'équipe (X-Signaler-Cle) accepte aussi Authorization: Bearer <session>.
 // Appareil DE CONFIANCE (C.appareilDeConfiance) : inscrit avec la session d'un appareil de confiance, ou avec la clé seule quand la
 // personne n'avait encore jamais eu d'appareil, ou avant ce changement. Un appareil inscrit avec la clé seule alors que la personne
-// en a déjà eu un (une clé volée suffit pour cela) se connecte et signale comme avant, mais ne crée pas de clé et ne met pas en ligne.
+// en a déjà eu un (une clé volée suffit pour cela) se connecte, signale et met en ligne comme avant, mais ne crée pas de clé.
+// (Mettre en ligne ne demande plus d'appareil de confiance : choix du propriétaire, 2026-10-21, « un système plus simple ».)
 import * as C from '../coeur.mjs';
 import * as P from '../push.mjs';
 
@@ -47,7 +48,6 @@ const SESSION_REFUSEE = { ok: false, cle: true, session: true, erreur: 'connexio
 // L'appareil de la session n'est pas de confiance (inscrit avec la clé seule) : 403 « confiance » (pas « empreinte » : reposer le
 // doigt sur CET appareil n'y changerait rien ; il faut celui d'un appareil de confiance, le téléphone par exemple).
 const PAS_DE_CONFIANCE_CLE = { ok: false, confiance: true, erreur: 'Cet appareil a été ajouté avec la clé d’équipe seule : une nouvelle clé se crée avec l’empreinte d’un appareil de confiance (ton téléphone).' };
-const PAS_DE_CONFIANCE_VALIDER = { ok: false, confiance: true, erreur: 'cet appareil a été ajouté avec la clé d’équipe seule : mets en ligne avec l’empreinte d’un appareil de confiance (ton téléphone)' };
 
 // Le stockage, ramené à une seule forme : put/get pour les pièces (forme R2 : { body, httpMetadata }), lireTexte/ecrireTexte pour
 // les demandes, les appareils et les réglages (du JSON), effacer (null si le stockage ne sait pas). Workers KV : chaque pièce
@@ -379,8 +379,9 @@ export async function annuler(req, env, outils, id) {
 
 // POST /demandes/<réf>/valider : une demande « à valider » (avec sa PR) → travail VALIDER (fusion, en ligne, RETOUR « en_ligne »).
 // Exige une SESSION de connexion par empreinte (30 jours ; plus de seconde empreinte de moins de 5 minutes, choix du propriétaire le
-// 2026-10-21 ; la clé d'équipe seule ne suffit pas : 403 « empreinte: true », la page propose la connexion), d'un appareil DE CONFIANCE (sinon 403 « confiance: true » : une clé volée inscrit un appareil, et
-// l'empreinte de cet appareil ne doit pas mettre en ligne). Jamais pour Avinou Malkenou : 409.
+// 2026-10-21 ; la clé d'équipe seule ne suffit pas : 403 « empreinte: true », la page propose la connexion), de N'IMPORTE QUEL
+// appareil inscrit (de confiance ou non : choix du propriétaire, 2026-10-21 ; une clé volée qui inscrit un appareil peut donc mettre
+// en ligne une demande déjà « à valider »). Jamais pour Avinou Malkenou : 409.
 export async function valider(req, env, outils, id) {
   const m = await maDemande(req, env, id);
   if (m.refus) return m.refus;
@@ -388,7 +389,6 @@ export async function valider(req, env, outils, id) {
   if (projet === 'avinou') return json({ ok: false, erreur: 'Avinou Malkenou est mis en ligne par son propriétaire, depuis son Mac (son coffre) : rien à valider ici.', demande: publique(env, d) }, 409, cors);
   if (d.etat !== 'a_valider') return json({ ok: false, erreur: 'rien à mettre en ligne : cette demande n’est pas « à valider »', demande: publique(env, d) }, 409, cors);
   if (!C.prsDe(d.liens).length) return json({ ok: false, erreur: 'aucune PR à mettre en ligne dans cette demande', demande: publique(env, d) }, 409, cors);
-  if (a.session && !C.appareilDeConfiance(a.appareil)) return json(PAS_DE_CONFIANCE_VALIDER, 403, cors);
   if (!a.session) return json({ ok: false, empreinte: true, erreur: 'connecte-toi avec ton empreinte pour mettre en ligne' }, 403, cors);
   if (!C.boutonActif(await etatDuBouton(st), projet)) return json(COUPE, 403, cors);
   return lancerTravail(req, env, outils, m, 'valider');

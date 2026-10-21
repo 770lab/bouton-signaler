@@ -1218,14 +1218,15 @@ export const appareilValide = (ap, id) => !!(ap && typeof ap === 'object' && !ap
 // peut inscrire SON appareil (une vraie clé d'accès sur son téléphone, ou un appareil logiciel : l'attestation « none » ne dit pas
 // ce qu'il est, et c'est lui qui pose le drapeau UV) et reçoit aussitôt une session à empreinte fraîche. Cette session ne doit pas
 // suffire à créer une nouvelle clé d'équipe (POST /auth/cle/nouvelle : l'ancienne cesserait de marcher, le propriétaire serait
-// enfermé dehors, et le Terminal ne le sauverait pas : l'intrus, toujours inscrit, recréerait une clé) ni à mettre en ligne
-// (POST /demandes/<réf>/valider). Ces deux gestes exigent un appareil DE CONFIANCE, c'est-à-dire inscrit :
+// enfermé dehors, et le Terminal ne le sauverait pas : l'intrus, toujours inscrit, recréerait une clé). Ce geste exige un appareil
+// DE CONFIANCE, c'est-à-dire inscrit (mettre en ligne, POST /demandes/<réf>/valider, ne l'exige plus : choix du propriétaire du
+// 2026-10-21, « un système plus simple ») :
 //   - avec la session d'un appareil de confiance ;
 //   - ou avec la clé seule quand la personne n'avait encore JAMAIS eu d'appareil (sa liste « appareils:<nom> » n'existe pas encore ;
 //     retirer tous ses appareils ne rouvre pas cette porte : la liste reste, vide) ;
 //   - ou avant ce changement (rangé sans le champ « sur ») : rien ne change pour les appareils déjà inscrits.
 // Sinon (la clé seule, alors que la personne a déjà eu un appareil) : sur = false. Cet appareil se connecte, signale, lit et
-// renvoie ses demandes comme avant ; « Nouvelle clé » et « Mettre en ligne » lui répondent 403 { confiance: true }.
+// renvoie et met en ligne ses demandes comme avant ; « Nouvelle clé » lui répond 403 { confiance: true }.
 export const appareilDeConfiance = (ap) => !!ap && typeof ap === 'object' && ap.sur !== false;
 // Le nouvel appareil sera-t-il de confiance ? o : { appareil (celui de la session qui demande les options ; null = la clé seule),
 // jamaisInscrit (la personne n'a jamais eu d'appareil) }. Décidé aux options d'inscription, rangé dans le défi, puis dans l'appareil.

@@ -116,8 +116,8 @@ moins de 5 minutes posée sur un appareil de confiance, tire une clé de 24 cara
 l'empreinte sous `cle:<nom>`, avec celle de la clé que `CLES` donnait alors à cette personne.
 
 **Appareil de confiance.** Une clé d'équipe suffit à inscrire un appareil (« Ajouter cet appareil ») : quelqu'un qui a volé la
-clé peut donc inscrire LE SIEN et poser son propre doigt. Pour qu'il ne puisse ni créer une clé (l'ancienne cesserait de marcher
-partout) ni mettre en ligne, le relais distingue les appareils de confiance. Est de confiance un appareil inscrit :
+clé peut donc inscrire LE SIEN et poser son propre doigt. Pour qu'il ne puisse pas créer une clé (l'ancienne cesserait de marcher
+partout), le relais distingue les appareils de confiance (mettre en ligne ne l'exige plus : choix du propriétaire, 2026-10-21). Est de confiance un appareil inscrit :
 - avec la connexion par empreinte d'un appareil de confiance ;
 - ou avec la clé seule quand la personne n'avait encore jamais eu d'appareil (son premier ; retirer tous ses appareils ne rouvre
   pas cette porte) ;
@@ -125,7 +125,7 @@ partout) ni mettre en ligne, le relais distingue les appareils de confiance. Est
   « Mes appareils » et retirer tout appareil inconnu, il compterait comme de confiance).
 
 Un appareil inscrit avec la clé seule alors que la personne en avait déjà un n'est pas de confiance : il se connecte, signale et
-suit ses demandes comme avant, mais « Nouvelle clé » et « Mettre en ligne » lui répondent `403` avec `confiance: true`. Le
+suit et met en ligne ses demandes comme avant, mais « Nouvelle clé » lui répond `403` avec `confiance: true`. Le
 pupitre le marque « ajouté avec la clé seule » dans « Mes appareils ». Depuis un tel appareil (un ordinateur sans empreinte, par
 exemple), on choisit le téléphone quand l'empreinte est demandée (QR code) : c'est alors l'empreinte du téléphone qui compte.
 
