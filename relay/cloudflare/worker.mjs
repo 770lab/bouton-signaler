@@ -36,7 +36,7 @@ import * as C from '../coeur.mjs';
 import * as P from '../push.mjs';
 
 const PIECE_RX = /^\/piece\/([0-9a-f]{32})$/;
-const DEMANDE_RX = /^\/demandes\/([0-9a-f]{12})\/(renvoyer|annuler|valider|regler|rouvrir)$/;
+const DEMANDE_RX = /^\/demandes\/([0-9a-f]{12})\/(renvoyer|annuler|valider|regler|rouvrir|verifier|deverifier)$/;
 const RETIRER_RX = /^\/auth\/appareils\/([A-Za-z0-9_-]{16,400})\/retirer$/;
 const KV_DUREE_S = 30 * 24 * 3600;
 const SANS_STOCKAGE = 'le relais n’a pas de stockage';
@@ -372,13 +372,17 @@ async function marquer(req, env, id, quoi) {
   const m = await maDemande(req, env, id);
   if (m.refus) return m.refus;
   const { a, st, d, cors } = m;
-  const x = quoi === 'regler' ? C.regler(d, Date.now()) : C.rouvrir(d);
+  const x = quoi === 'regler' ? C.regler(d, Date.now()) : quoi === 'rouvrir' ? C.rouvrir(d)
+    : quoi === 'verifier' ? C.verifier(d, Date.now()) : C.deverifier(d);
   await ecrireDemande(st, x);
   console.log('[' + quoi + ']', JSON.stringify({ ref: id, qui: a.qui }));
   return json({ ok: true, demande: publique(env, x) }, 200, cors);
 }
 export const regler = (req, env, outils, id) => marquer(req, env, id, 'regler');
 export const rouvrir = (req, env, outils, id) => marquer(req, env, id, 'rouvrir');
+// POST /demandes/<réf>/verifier · /deverifier : la marque « À vérifier » de l'Atelier (averifierLeMs), pareil (21/10/2026).
+export const verifier = (req, env, outils, id) => marquer(req, env, id, 'verifier');
+export const deverifier = (req, env, outils, id) => marquer(req, env, id, 'deverifier');
 
 // Les notifications : un abonnement par appareil, rangés par personne (« push:<nom> », 10 au plus, le plus récent d'abord).
 // Sans VAPID_PUBLIC et VAPID_PRIVEE : rien ne part (la page le sait par GET /push/cle).
@@ -726,7 +730,7 @@ export async function routeur(req, env, outils) {
     if (m === 'POST' && p === '/signaler') return await signaler(req, env, outils);
     if (m === 'GET' && p === '/demandes') return await demandes(req, env);
     const r = DEMANDE_RX.exec(p);
-    if (m === 'POST' && r) return await ({ renvoyer: renvoyer, annuler: annuler, valider: valider, regler: regler, rouvrir: rouvrir })[r[2]](req, env, outils, r[1]);
+    if (m === 'POST' && r) return await ({ renvoyer: renvoyer, annuler: annuler, valider: valider, regler: regler, rouvrir: rouvrir, verifier: verifier, deverifier: deverifier })[r[2]](req, env, outils, r[1]);
     if (m === 'GET' && p === '/push/cle') return await pushCle(req, env);
     if (m === 'POST' && (p === '/push/abonner' || p === '/push/desabonner')) return await pushAbonner(req, env, p === '/push/desabonner');
     if (m === 'POST' && p === '/retour') return await retour(req, env, outils);

@@ -1503,6 +1503,32 @@ test('POST /demandes/<réf>/regler · /rouvrir : la marque « Réglé » de l’
   assert.equal(C.apresEnvoi(C.regler({ id: a.ref, etat: 'en_ligne' }, 5), { ok: false }, { quand: 9, garder: true }).regleeLeMs, 5, 'pas repartie : marque gardée');
 });
 
+test('POST /demandes/<réf>/verifier · /deverifier : la marque « À vérifier » de l’Atelier, gardée par le relais ; la sienne seulement ; rien ne part chez Claude', async () => {
+  const env = envKv(), R = routine();
+  const a = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
+  const chemin = '/demandes/' + a.ref + '/verifier', n = R.appels.length;
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: CLE_PAUL })).status, 404, 'la demande d’un autre');
+  assert.equal((await appel(env, R, 'POST', chemin, { cle: null })).status, 401);
+  assert.equal((await appel(env, R, 'POST', chemin, { origine: 'https://pirate.fr' })).status, 403);
+  let rep = await appel(env, R, 'POST', chemin);
+  const j = await rep.json();
+  assert.equal(rep.status, 200); assert.equal(j.ok, true);
+  assert.equal(R.appels.length, n, 'la routine n’est pas appelée');
+  assert.equal(j.demande.etat, 'envoyee', 'l’état de Claude ne change pas');
+  assert.ok(Number(j.demande.averifierLeMs) > 0);
+  const liste = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes;
+  assert.equal(liste.find((x) => x.id === a.ref).averifierLeMs, j.demande.averifierLeMs, 'sur tous les appareils (GET /demandes)');
+  // Un retour de la routine garde la marque ; « Réglé » aussi ; on l'enlève soi-même.
+  assert.equal((await retourDe(env, { id: a.ref, cle: jetonDe(R.appels[n - 1].corps.text), etat: 'question', resume: 'Laquelle ?' })).status, 200);
+  assert.equal(lireDemande(env, a.ref).averifierLeMs, j.demande.averifierLeMs);
+  assert.equal((await appel(env, R, 'POST', '/demandes/' + a.ref + '/regler')).status, 200);
+  assert.equal(lireDemande(env, a.ref).averifierLeMs, j.demande.averifierLeMs);
+  rep = await appel(env, R, 'POST', '/demandes/' + a.ref + '/deverifier');
+  assert.equal(rep.status, 200); assert.equal('averifierLeMs' in (await rep.json()).demande, false);
+  assert.equal('averifierLeMs' in lireDemande(env, a.ref), false);
+  assert.ok(Number(lireDemande(env, a.ref).regleeLeMs) > 0, '« Réglé » reste');
+});
+
 test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forcément fraîche), à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7);
   const { j: ins } = await inscrire(env, A);
