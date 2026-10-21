@@ -37,7 +37,7 @@ export const LIMITES = {
   journalTexte: 8000,       // le journal tel qu'il est recopié dans le texte de la routine
   authOctets: 65_536,       // le corps des routes /auth (une attestation avec ses certificats tient en quelques Ko)
   defiDureeS: 300,          // un défi WebAuthn vaut 5 minutes, une seule fois
-  sessionDureeMs: 12 * 3600 * 1000, // une session (après l'empreinte) vaut 12 heures
+  sessionDureeMs: 30 * 24 * 3600 * 1000, // une session (après l'empreinte) vaut 30 jours (choix du propriétaire, 2026-10-21 ; 12 h avant)
   fraicheMs: 5 * 60 * 1000, // « empreinte fraîche » : posée il y a 5 minutes au plus (mettre en ligne)
   appareils: 20,            // appareils (clés d'accès) par personne
   appareilIdOctets: 255,    // l'identifiant d'une clé d'accès (une clé KV fait 512 octets au plus)
@@ -807,7 +807,7 @@ function neutraliserDonnees(L) { return L[0] + '\n' + neutraliser(L.slice(1).joi
 // ——— LA CONNEXION PAR EMPREINTE (WebAuthn, « clés d'accès ») ———
 // Une personne qui a déjà une clé d'équipe (ou une session) inscrit son appareil (POST /auth/options/inscription puis
 // /auth/inscription) ; ensuite elle se connecte par l'empreinte, sans rien taper (/auth/options/connexion puis /auth/connexion) et
-// reçoit une SESSION de 12 heures : un jeton signé par le relais (HMAC-SHA256 avec le secret SESSION_SECRET), accepté partout où la
+// reçoit une SESSION de 30 jours : un jeton signé par le relais (HMAC-SHA256 avec le secret SESSION_SECRET), accepté partout où la
 // clé d'équipe l'est (Authorization: Bearer <session>). Aucune bibliothèque : le CBOR, les clés COSE et les signatures sont lus ici.
 
 // base64url (sans « = ») ↔ octets. Le décodage accepte aussi le base64 ordinaire (+ /) et les « = » de fin ; null si illisible.
@@ -1134,7 +1134,7 @@ export const appareilsAvec = (ids, id) => [id].concat((Array.isArray(ids) ? ids 
 export const appareilsSans = (ids, id) => (Array.isArray(ids) ? ids : []).filter((x) => x !== id && ID_APPAREIL_RX.test(String(x)));
 
 // LES SESSIONS. Jeton = base64url(JSON) + "." + base64url(HMAC-SHA256(SESSION_SECRET, première partie)). Contenu : { v: 1, qui,
-// app (l'identifiant de l'appareil), rp, iat, exp (iat + 12 h), uv (l'heure de l'empreinte) } — heures en millisecondes. Valable si
+// app (l'identifiant de l'appareil), rp, iat, exp (iat + 30 jours), uv (l'heure de l'empreinte) } — heures en millisecondes. Valable si
 // la signature est juste (comparée en temps constant) et pas expirée ; le relais vérifie EN PLUS, à chaque usage, que l'appareil
 // existe toujours (retiré = ses sessions ne valent plus rien) et que la personne a toujours une clé dans CLES (retirer quelqu'un de
 // CLES retire aussi ses appareils). « Fraîche » : l'empreinte date de 5 minutes au plus (mettre en ligne).

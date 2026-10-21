@@ -8,7 +8,7 @@ Quand la correction est en ligne, on rafraîchit la page.
 - Plusieurs captures, import d'images, dictée du navigateur (ou note vocale jointe), dernières erreurs de la page jointes.
 - Le jeton de la routine reste sur un petit **relais** (Cloudflare Worker gratuit, ou le serveur du projet) : jamais dans la page.
 - Seules les personnes qui ont une **clé d'équipe** peuvent envoyer un signalement ; une fois leur appareil inscrit, elles se
-  connectent **par l'empreinte** (clés d'accès WebAuthn, vérifiées par le relais, sans bibliothèque) : une session de 12 heures,
+  connectent **par l'empreinte** (clés d'accès WebAuthn, vérifiées par le relais, sans bibliothèque) : une session de 30 jours,
   acceptée partout où la clé l'est, et par l'API d'un autre serveur (`POST /auth/verifier`).
 - **Corriger en direct** : chaque projet a son **mode**. « Direct » : la routine corrige, fusionne, attend que ce soit en ligne
   et renvoie les captures **avant / après** ; « Annuler » (un appui maintenu) remet comme avant. « À valider » : la routine ouvre

@@ -350,7 +350,7 @@ export async function annuler(req, env, outils, id) {
 }
 
 // POST /demandes/<réf>/valider : une demande « à valider » (avec sa PR) → travail VALIDER (fusion, en ligne, RETOUR « en_ligne »).
-// Exige une SESSION de connexion par empreinte (12 h ; plus de seconde empreinte de moins de 5 minutes, choix du propriétaire le
+// Exige une SESSION de connexion par empreinte (30 jours ; plus de seconde empreinte de moins de 5 minutes, choix du propriétaire le
 // 2026-10-21 ; la clé d'équipe seule ne suffit pas : 403 « empreinte: true », la page propose la connexion), d'un appareil DE CONFIANCE (sinon 403 « confiance: true » : une clé volée inscrit un appareil, et
 // l'empreinte de cet appareil ne doit pas mettre en ligne). Jamais pour Avinou Malkenou : 409.
 export async function valider(req, env, outils, id) {
@@ -608,7 +608,7 @@ async function optionsConnexionRoute(req, env, st, cors) {
   return json(Object.assign({ ok: true }, o, { publicKey: o }), 200, cors);
 }
 
-// POST /auth/connexion <assertion> : la signature de l'appareil vérifiée avec sa clé rangée → une session de 12 heures.
+// POST /auth/connexion <assertion> : la signature de l'appareil vérifiée avec sa clé rangée → une session de 30 jours.
 async function connexion(req, env, st, cors) {
   const rp = rpDe(req, env);
   if (!rp) return json(NON_AUTORISEE, 403, cors);

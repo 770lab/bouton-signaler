@@ -200,7 +200,7 @@ const RELAIS = 'http://127.0.0.1:' + relais.address().port;
 
 // ── LE VRAI RELAIS (section 11) : l'export par défaut de relay/cloudflare/worker.mjs, dans un fil à part (worker_threads) ──────
 // Sa montre avance à la demande (POST /__test/decalage) sans toucher à celle de ce processus (Playwright compte ses délais) : les
-// 12 h d'une session, les 5 minutes d'une empreinte fraîche et les 15 minutes « sans nouvelle » sont vraiment éprouvées. Workers KV
+// 30 jours d'une session, les 5 minutes d'une empreinte fraîche et les 15 minutes « sans nouvelle » sont vraiment éprouvées. Workers KV
 // en mémoire (ses durées suivent cette montre) ; la routine des DEUX abonnements est fausse : rien ne sort vers api.anthropic.com.
 // /__test/… : decalage { ms }, routine { trig_…: statut }, appels (ce qu'a reçu la routine), journal (les requêtes des pages, et
 // si elles portaient une session ou la clé), kv?prefixe= (les clés rangées).
@@ -1252,8 +1252,8 @@ try {
   const clesA = await telA.cles(), sA = await sessionDe(A.p), appareils = await ctl('kv?prefixe=appareil:');
   ok(clesA.length === 1 && clesA[0].isResidentCredential && clesA[0].rpId === 'localhost' && (await webauthn(A.p)).create === 1,
     '« Activer l’empreinte » : une clé d’accès créée sur l’appareil (découvrable, rpId = localhost, le nom d’hôte de la page)');
-  ok(appareils.length === 1 && sA && sA.qui === 'marie' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(sA.session) && Math.abs(sA.exp - Date.now() - 12 * 3600000) < 120000,
-    'le relais l’a vérifiée (attestation, UP + UV) et rangée (appareil:<id>) ; la session de 12 h est gardée (signaler_session_v1, marie)');
+  ok(appareils.length === 1 && sA && sA.qui === 'marie' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(sA.session) && Math.abs(sA.exp - Date.now() - 30 * 24 * 3600000) < 120000,
+    'le relais l’a vérifiée (attestation, UP + UV) et rangée (appareil:<id>) ; la session de 30 jours est gardée (signaler_session_v1, marie)');
   ok(!(await A.p.$('.sgn-offre')) && /Connexion par empreinte \(marie\)/.test(await texte(A.p, '.sgn-pied')), 'la proposition disparaît ; le bas de la fenêtre dit « Connexion par empreinte (marie) »');
   await envoyerTexte(A.p, 'Deuxième envoi : la session suffit');
   ok((await derniere('/signaler')).par === 'session', 'l’envoi suivant passe par la session (Authorization: Bearer), plus par la clé');
@@ -1475,8 +1475,8 @@ try {
   ok(!pb11.length, 'mise en page des cartes à 412 px' + (pb11.length ? ' — ' + pb11.join(' ; ') : ''));
   const boiteNoire = JSON.stringify(await Dp.p.evaluate(() => window.Signaler._journal()));
   ok(!boiteNoire.includes((await sessionDe(Dp.p)).session.split('.')[1]) && !/auth\/|Bearer/.test(boiteNoire), 'la boîte noire ne garde rien des appels du bouton (ni /auth, ni la session)');
-  // La session expire (12 h passées à la montre du relais) : 401, la page l'oublie et redemande l'empreinte.
-  await ctl('decalage', { ms: 13 * 3600000 });
+  // La session expire (30 jours passés à la montre du relais) : 401, la page l'oublie et redemande l'empreinte.
+  await ctl('decalage', { ms: 31 * 24 * 3600000 });
   await actualiser(Dp.p, true);
   await Dp.p.waitForSelector('.sgn-erreur', { timeout: 8000 }).catch(() => {});
   ok(/^Ta connexion a expiré/.test(await texte(Dp.p, '.sgn-erreur')) && !(await sessionDe(Dp.p)) && !!(await Dp.p.$('.sgn-acces [data-a="empreinte"]')),
