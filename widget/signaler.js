@@ -36,7 +36,7 @@
  *  pas partie ou sans nouvelle depuis 15 minutes (et « Renvoyer sur l’autre abonnement »).
  *
  *  LA CONNEXION. Par EMPREINTE (WebAuthn, clés d'accès, rpId = le nom d'hôte de la page) : POST /auth/options/connexion puis
- *  /auth/connexion → une SESSION de 12 h gardée sous localStorage signaler_session_v1 = { session, exp, qui } (partagée par les
+ *  /auth/connexion → une SESSION de 30 jours gardée sous localStorage signaler_session_v1 = { session, exp, qui } (partagée par les
  *  pages de 770lab.com : Home, le pupitre, HavroutIA), envoyée en « Authorization: Bearer ». Refusée (401) ou expirée : oubliée.
  *  Sans session ni clé, la fenêtre propose « Se connecter avec l’empreinte » (et « J’ai une clé » pour l'ancien champ). La clé
  *  d'équipe (X-Signaler-Cle, localStorage signaler_cle_v1) marche toujours ; après un envoi fait avec elle, si le relais a réglé
@@ -575,7 +575,7 @@
     if (badge) { badge.remove(); badge = null; }
   }
 
-  // ── LA CONNEXION : une SESSION (après l'empreinte, 12 h) ou la clé d'équipe ──────────────────────────────────────────────────
+  // ── LA CONNEXION : une SESSION (après l'empreinte, 30 jours) ou la clé d'équipe ──────────────────────────────────────────────────
   // signaler_session_v1 = { session, exp, qui }, écrit aussi par le pupitre (même origine 770lab.com). Le jeton est signé par le
   // relais : la page le lit seulement (l'heure de l'empreinte « uv » dit s'il est frais pour « Mettre en ligne ») et le renvoie ;
   // c'est le relais qui juge. Illisible ou expiré : oublié tout de suite ; refusé par le relais (401) : oublié aussi.

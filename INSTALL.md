@@ -16,7 +16,7 @@ page (widget/signaler.js) ──POST /signaler──▶ relais ──POST …/ro
   « Mes demandes » ◀──GET /demandes──────    et son état                                avant / après, de quoi annuler
   Annuler / Mettre en ligne ──POST /demandes/<réf>/annuler|valider──▶ un travail ANNULER ou VALIDER pour la routine
   le bouton se montre ou non ◀──GET /etat──  interrupteurs et modes (POST /etat), abonnements (GET / POST /routine)
-  « Se connecter avec l'empreinte » ──/auth/…──▶ clés d'accès (WebAuthn) → session de 12 h ◀──POST /auth/verifier── un autre serveur
+  « Se connecter avec l'empreinte » ──/auth/…──▶ clés d'accès (WebAuthn) → session de 30 jours ◀──POST /auth/verifier── un autre serveur
 ```
 
 Trois morceaux : le **bouton** dans la page, le **relais** (seul à connaître les jetons des routines), la **routine** sur le compte
@@ -261,7 +261,7 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   code ou une clé USB) inscrivent l'appareil (20 par personne au plus, `sur` : de confiance ou non, étape 3) et rendent une
   session ; `POST` (ou `GET`) `/auth/options/connexion` puis `POST /auth/connexion` (le résultat
   de `navigator.credentials.get`) rendent `{ session, exp, qui, appareil }`. Les options sont à plat et sous `publicKey`.
-  Une session dure 12 heures (`exp` en millisecondes) ; elle vaut la clé partout (`Authorization: Bearer <session>`) tant que
+  Une session dure 30 jours (`exp` en millisecondes) ; elle vaut la clé partout (`Authorization: Bearer <session>`) tant que
   l'appareil est inscrit et que la personne a une clé dans `CLES` (retirer quelqu'un de `CLES` retire aussi ses appareils).
   `GET /auth/appareils` et `POST /auth/appareils/<id>/retirer` (les siens seulement) gèrent « Mes appareils » ;
   `POST /auth/verifier {"session"}` → `{ ok, valide, qui?, exp?, uv?, sur? }` sert à un autre serveur (l'API d'un Mac… : pour un

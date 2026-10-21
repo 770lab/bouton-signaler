@@ -881,7 +881,7 @@ const envAuth = (extra) => envKv(Object.assign({ ORIGINES: [ORIGINE, ORIGINE_770
 test('les sessions : signées par le relais, expirées, falsifiées, d’un autre secret ; « fraîche » = empreinte de moins de 5 minutes', async () => {
   const H = 3600 * 1000, app = 'A'.repeat(43);
   const p = C.nouvelleSession({ qui: 'marie', app: app, rp: '770lab.com', quand: 1000 });
-  assert.deepEqual(p, { v: 1, qui: 'marie', app: app, rp: '770lab.com', iat: 1000, exp: 1000 + 12 * H, uv: 1000 });
+  assert.deepEqual(p, { v: 1, qui: 'marie', app: app, rp: '770lab.com', iat: 1000, exp: 1000 + 30 * 24 * H, uv: 1000 });
   const j = await C.signerSession(p, SECRET);
   assert.match(j, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/);
   assert.deepEqual(await C.lireSession(j, SECRET, 2000), { ok: true, p: p });
@@ -997,7 +997,7 @@ for (const [alg, nom] of [[-7, 'ES256'], [-257, 'RS256']]) {
     assert.equal(ins.j.ok, true); assert.equal(ins.j.qui, 'marie');
     assert.deepEqual(Object.keys(ins.j.appareil).sort(), ['creeLe', 'id', 'nom', 'rpId', 'sur']); assert.equal(ins.j.appareil.sur, true, 'le premier appareil de marie : de confiance');
     assert.deepEqual([ins.j.appareil.id, ins.j.appareil.nom, ins.j.appareil.rpId], [A.id, 'iPhone de marie', '770lab.com']);
-    assert.ok(ins.j.exp >= avant + 12 * 3600 * 1000 && ins.j.exp <= Date.now() + 12 * 3600 * 1000, 'session de 12 h, en ms');
+    assert.ok(ins.j.exp >= avant + 30 * 24 * 3600 * 1000 && ins.j.exp <= Date.now() + 30 * 24 * 3600 * 1000, 'session de 30 jours, en ms');
     const ap = appareilRange(env, A.id);
     assert.deepEqual([ap.qui, ap.rpId, ap.nom, ap.alg, ap.signCount], ['marie', '770lab.com', 'iPhone de marie', alg, 0]);
     assert.equal(ap.jwk.kty, alg === -7 ? 'EC' : 'RSA'); assert.deepEqual(ap.transports, ['internal', 'hybrid'], 'transports connus seulement');
@@ -1184,7 +1184,7 @@ test('POST /auth/verifier (pour l’API du Mac) : valide, expirée, falsifiée, 
   assert.equal(rep.status, 200); assert.equal(rep.headers.get('Cache-Control'), 'no-store');
   const x = await rep.json();
   assert.deepEqual([x.ok, x.valide, x.qui, x.exp], [true, true, 'marie', j.exp]); assert.equal(typeof x.uv, 'number');
-  const vieille = await C.signerSession(Object.assign(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 13 * 3600 * 1000 })), SECRET);
+  const vieille = await C.signerSession(Object.assign(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 31 * 24 * 3600 * 1000 })), SECRET);
   for (const corps of [{ session: vieille }, { session: j.session + 'x' }, { session: 42 }, {}, { session: await C.signerSession(C.nouvelleSession({ qui: 'marie', app: 'B'.repeat(43), rp: '770lab.com', quand: Date.now() }), SECRET) }])
     assert.deepEqual(await (await v(corps)).json(), { ok: true, valide: false }, JSON.stringify(corps).slice(0, 40));
   assert.equal((await v('{pas du json')).status, 400); assert.equal((await v('[]')).status, 400);
@@ -1619,7 +1619,7 @@ test('POST /auth/cle/nouvelle : empreinte de moins de 5 minutes exigée (la clé
   assert.equal(rep.status, 403); assert.equal(rep.headers.get('Access-Control-Allow-Origin'), ORIGINE_770);
   assert.deepEqual(await rep.json(), { ok: false, empreinte: true, erreur: 'Une nouvelle clé se crée seulement avec ton empreinte.' });
   // Une session refusée (expirée, falsifiée, d'un appareil inconnu, illisible) : 401, comme partout (la page l'oublie).
-  const expiree = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 13 * 3600 * 1000 }), SECRET);
+  const expiree = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now() - 31 * 24 * 3600 * 1000 }), SECRET);
   const inconnu = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: 'B'.repeat(43), rp: '770lab.com', quand: Date.now() }), SECRET);
   for (const s of [expiree, ins.session + 'x', inconnu, 'illisible']) {
     rep = await nouvelle({ cle: CLE_MARIE, entetes: bearer(s) });
