@@ -21,8 +21,8 @@
 //
 // Routes : POST /signaler · GET /piece/<id> (une capture, la note, une capture avant / après, sous une adresse de 128 bits)
 //          GET /demandes (les miennes) · POST /demandes/<réf>/renvoyer (pas partie, ou sans nouvelle depuis 15 min ; { abonnement })
-//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; connecté par l'empreinte, tout
-//          appareil inscrit) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
+//          POST /demandes/<réf>/annuler (en ligne) · POST /demandes/<réf>/valider (à valider ; la clé d'équipe suffit,
+//          sans empreinte) · POST /demandes/<réf>/regler · POST /demandes/<réf>/rouvrir (la marque « Réglé » de l'Atelier)
 //          POST /retour (la routine, de serveur à serveur : l'état de la demande, ses captures, de quoi annuler, avec son jeton)
 //          GET /etat[?projet=<id>] · POST /etat (interrupteurs et mode de chaque projet) · GET / POST /routine (les abonnements)
 //          /auth/… (la connexion par empreinte : options/inscription, inscription, options/connexion, connexion, appareils,
@@ -32,7 +32,8 @@
 // Appareil DE CONFIANCE (C.appareilDeConfiance) : inscrit avec la session d'un appareil de confiance, ou avec la clé seule quand la
 // personne n'avait encore jamais eu d'appareil, ou avant ce changement. Un appareil inscrit avec la clé seule alors que la personne
 // en a déjà eu un (une clé volée suffit pour cela) se connecte, signale et met en ligne comme avant, mais ne crée pas de clé.
-// (Mettre en ligne ne demande plus d'appareil de confiance : choix du propriétaire, 2026-10-21, « un système plus simple ».)
+// (Mettre en ligne ne demande ni appareil de confiance ni empreinte : la clé d'équipe suffit, choix du propriétaire, 2026-10-22 :
+// « je ne veux plus avoir à valider par empreinte l'envoi d'une modification ».)
 import * as C from '../coeur.mjs';
 import * as P from '../push.mjs';
 
@@ -378,18 +379,16 @@ export async function annuler(req, env, outils, id) {
 }
 
 // POST /demandes/<réf>/valider : une demande « à valider » (avec sa PR) → travail VALIDER (fusion, en ligne, RETOUR « en_ligne »).
-// Exige une SESSION de connexion par empreinte (30 jours ; plus de seconde empreinte de moins de 5 minutes, choix du propriétaire le
-// 2026-10-21 ; la clé d'équipe seule ne suffit pas : 403 « empreinte: true », la page propose la connexion), de N'IMPORTE QUEL
-// appareil inscrit (de confiance ou non : choix du propriétaire, 2026-10-21 ; une clé volée qui inscrit un appareil peut donc mettre
-// en ligne une demande déjà « à valider »). Jamais pour Avinou Malkenou : 409.
+// Comme « Annuler » : la clé d'équipe (ou une session) de la personne suffit, sans empreinte ni appareil de confiance (choix du
+// propriétaire, 2026-10-22 : « je ne veux plus avoir à valider par empreinte l'envoi d'une modification » ; une clé volée peut donc
+// mettre en ligne une demande déjà « à valider » de son nom). Sans clé ni session : 401. Jamais pour Avinou Malkenou : 409.
 export async function valider(req, env, outils, id) {
   const m = await maDemande(req, env, id);
   if (m.refus) return m.refus;
-  const { a, st, d, cors } = m, projet = C.projetDeLaDemande(d);
+  const { st, d, cors } = m, projet = C.projetDeLaDemande(d);
   if (projet === 'avinou') return json({ ok: false, erreur: 'Avinou Malkenou est mis en ligne par son propriétaire, depuis son Mac (son coffre) : rien à valider ici.', demande: publique(env, d) }, 409, cors);
   if (d.etat !== 'a_valider') return json({ ok: false, erreur: 'rien à mettre en ligne : cette demande n’est pas « à valider »', demande: publique(env, d) }, 409, cors);
   if (!C.prsDe(d.liens).length) return json({ ok: false, erreur: 'aucune PR à mettre en ligne dans cette demande', demande: publique(env, d) }, 409, cors);
-  if (!a.session) return json({ ok: false, empreinte: true, erreur: 'connecte-toi avec ton empreinte pour mettre en ligne' }, 403, cors);
   if (!C.boutonActif(await etatDuBouton(st), projet)) return json(COUPE, 403, cors);
   return lancerTravail(req, env, outils, m, 'valider');
 }

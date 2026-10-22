@@ -30,9 +30,9 @@
  *  refuse CETTE page (adresse absente de ses ORIGINES, ou relais pas encore à jour) ; GET /etat, public, peut le dire lui-même.
  *  Chaque carte : l'état, le projet, l'abonnement Claude qui l'a prise (« via abonnement 1 »), le résumé, les captures avant / après
  *  (un toucher les montre en plein écran), et ce que le relais permet (champ « actions ») : « Annuler » une modification en ligne
- *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (exige d’être connecté par l’empreinte : sinon le bouton
- *  la demande d’abord ; sur un appareil de confiance : un appareil ajouté avec la clé d'équipe seule ne met pas en ligne, le
- *  bouton le dit ; jamais pour Avinou Malkenou, que son propriétaire met en ligne depuis son Mac), « Renvoyer » une demande
+ *  (garder appuyé 1,2 s), « Mettre en ligne » une modification à valider (la clé d'équipe ou la session suffit, sans empreinte :
+ *  choix du propriétaire, 2026-10-22, l'empreinte sert à se connecter ; jamais pour Avinou Malkenou, que son propriétaire met en
+ *  ligne depuis son Mac), « Renvoyer » une demande
  *  pas partie ou sans nouvelle depuis 15 minutes (et « Renvoyer sur l’autre abonnement »).
  *
  *  LA CONNEXION. Par EMPREINTE (WebAuthn, clés d'accès, rpId = le nom d'hôte de la page) : POST /auth/options/connexion puis
@@ -96,8 +96,8 @@
     origineEnvoi: 'Cette page n’est pas autorisée par le relais (son adresse n’est pas dans sa liste, ORIGINES) : l’envoi sera refusé.',
     pasReglee: 'La connexion par empreinte n’est pas encore réglée sur le relais : utilise ta clé d’équipe.',
     sessionPerdue: 'Ta connexion a expiré (ou cet appareil a été retiré) : reconnecte-toi avec ton empreinte.',
-    // 403 « confiance » du relais : l'appareil de la session a été ajouté avec la clé seule (une clé volée suffit pour cela).
-    confiance: 'Cet appareil a été ajouté avec la clé d’équipe seule : il ne peut pas mettre en ligne. Mets en ligne depuis ton téléphone, ou ici après « Se déconnecter » puis « Se connecter avec l’empreinte » en choisissant ton téléphone.',
+    // 403 « empreinte » ou « confiance » à « Mettre en ligne » : un relais d'avant le 2026-10-22, qui exigeait encore l'empreinte.
+    relaisValider: 'Le relais n’est pas encore à jour : il demande encore l’empreinte pour mettre en ligne. Il doit être redéployé.',
     muet: 'Le relais ne répond pas : vérifie la connexion, puis réessaie.',
   };
 
@@ -684,7 +684,7 @@
     }).then(function (r) { EMP.enRoute = null; return r; });
     return EMP.enRoute;
   }
-  // Précharger le défi (fenêtre ouverte sans connexion, ou « Mettre en ligne » à l'écran) ; « pas réglée » : le champ de la clé.
+  // Précharger le défi (fenêtre ouverte sans connexion) ; « pas réglée » : le champ de la clé.
   function prechargerDefi() {
     if (!C.endpoint || !empreintePossible() || EMP.reglee === false || frais(EMP.defi) || EMP.enRoute) return;
     demanderDefi().then(function (r) {
@@ -698,8 +698,7 @@
     if (frais(d)) { d.pris = true; return Promise.resolve(d); }
     return demanderDefi().then(function (r) { if (EMP.defi === r) EMP.defi = null; r.pris = true; return r; });
   }
-  // Se connecter avec l'empreinte. Rend { ok, qui } ou { ok: false, msg, cle? (montrer le champ de la clé), absente? (annulée,
-  // ou pas d'empreinte pour ce site sur cet appareil) }.
+  // Se connecter avec l'empreinte. Rend { ok, qui } ou { ok: false, msg, cle? (montrer le champ de la clé) }.
   function connexionEmpreinte() {
     if (!empreintePossible()) return Promise.resolve({ ok: false, cle: true, msg: 'Ce navigateur ne sait pas demander l’empreinte : utilise ta clé d’équipe.' });
     return prendreDefi().then(function (d) {
@@ -714,11 +713,11 @@
         return appel('/auth/connexion', { methode: 'POST', corps: corps, delai: 20000 }).then(function (j) {
           if (j.ok && typeof j.session === 'string' && JETON_RX.test(j.session)) { garderSession(j); return { ok: true, qui: court(j.qui, 60) }; }
           if (j.statut === 503) { EMP.reglee = false; return { ok: false, cle: true, msg: MSG.pasReglee }; }
-          return { ok: false, absente: j.statut === 401, msg: 'Empreinte refusée par le relais : ' + (j.erreur || 'statut ' + j.statut) + '.' };
+          return { ok: false, msg: 'Empreinte refusée par le relais : ' + (j.erreur || 'statut ' + j.statut) + '.' };
         }, function () { return { ok: false, msg: MSG.muet }; });
       }, function (e) {
         var n = e && e.name;
-        return { ok: false, msg: messageWebAuthn(e, false), absente: n === 'NotAllowedError', cle: n === 'NotSupportedError' || n === 'SecurityError' };
+        return { ok: false, msg: messageWebAuthn(e, false), cle: n === 'NotSupportedError' || n === 'SecurityError' };
       });
     });
   }
@@ -1583,7 +1582,7 @@
       if (!fond) return;
       if (!r.ok) { el.disabled = false; dire(fond.querySelector('.sgn-etat'), r.msg, 'ko'); return; }
       EMP.offre = false;
-      // Ajouté avec la clé seule ou non : il envoie et met en ligne (choix du propriétaire, 2026-10-21) ; seule « Nouvelle clé » le distingue.
+      // Ajouté avec la clé seule ou non : il envoie et met en ligne ; seule « Nouvelle clé » le distingue.
       var dit = 'Empreinte activée sur cet appareil : la prochaine fois, elle suffira.';
       rendre(dit, 'ok');
       if (vue === 'demandes') chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(dit, 'ok'); });
@@ -1599,8 +1598,8 @@
     var a = String(x.abonnement || ''), autre = a === '1' ? '2' : a === '2' ? '1' : '';
     return autre && R.abonnements && R.abonnements.some(function (b) { return b.id === autre && b.regle; }) ? autre : '';
   }
-  // POST /demandes/<réf>/<quoi>. Rend [message, ton], ou { empreinte: true } (le relais veut une empreinte fraîche). 403
-  // « confiance » : reposer le doigt sur CET appareil n'y changerait rien (il a été ajouté avec la clé seule), on le dit.
+  // POST /demandes/<réf>/<quoi>. Rend [message, ton]. 403 « empreinte » ou « confiance » : un relais d'avant le 2026-10-22 (il
+  // exigeait l'empreinte pour mettre en ligne) ; on dit qu'il faut le redéployer.
   function agir(quoi, id, el, corps, m) {
     el.disabled = true;
     if (m.enCours) el.textContent = m.enCours;
@@ -1608,8 +1607,7 @@
       if (j.demande && typeof j.demande === 'object' && D.liste) { var d = j.demande; D.liste = D.liste.map(function (x) { return x.id === d.id ? d : x; }); }
       if (j.ok && j.demande && typeof j.demande === 'object') return m.ok(j.demande);
       if (j.coupe) { couper(); return [COUPE_MSG, 'ko']; }
-      if (j.statut === 403 && j.confiance) return [MSG.confiance, 'ko'];
-      if (j.statut === 403 && j.empreinte) return { empreinte: true };
+      if (j.statut === 403 && (j.confiance || j.empreinte)) return [MSG.relaisValider, 'ko'];
       if (j.sessionPerdue) return [MSG.sessionPerdue, 'ko'];
       if (j.statut === 401 || j.cle) return ['', ''];   // la lecture qui suit le dira et redemandera la clé
       if (j.statut === 404) return ['Demande introuvable : elle a peut-être été effacée.', 'ko'];
@@ -1642,34 +1640,12 @@
     agir('annuler', id, el, {}, { enCours: 'Annulation…', echec: 'Annulation pas partie : ',
       ok: function () { return ['Annulation lancée : Claude retire le changement, puis vérifie le site. Le résultat arrivera ici.', 'ok']; } }).then(apresAction);
   }
-  // « Mettre en ligne » une modification à valider : être connecté par l’empreinte suffit (pas de seconde empreinte). Sans session :
-  // l’empreinte d’abord ; le relais la refuse encore : une fois de plus, puis on s’arrête.
+  // « Mettre en ligne » une modification à valider : comme « Annuler », la clé d'équipe ou la session suffit, sans empreinte
+  // (choix du propriétaire, 2026-10-22 : « je ne veux plus avoir à valider par empreinte l'envoi d'une modification »).
   function mettreEnLigne(id, el) {
-    if (!id) return;
-    var pose = false;
-    el.disabled = true;
-    function empreinte() {
-      if (!empreintePossible() || EMP.reglee === false)
-        return Promise.resolve({ ok: false, msg: 'Mettre en ligne demande ton empreinte, ' + (EMP.reglee === false ? 'et la connexion par empreinte n’est pas encore réglée sur le relais.' : 'et ce navigateur ne sait pas la demander.') });
-      pose = true;
-      dire(fond.querySelector('.sgn-etat'), 'Pose ton empreinte pour mettre en ligne…');
-      return connexionEmpreinte();
-    }
-    function lancer(forcer) {
-      var s = sessionGardee();
-      return (s && !forcer ? Promise.resolve({ ok: true }) : empreinte()).then(function (r) {
-        if (!r.ok) {
-          // Pas d'empreinte pour ce site sur cet appareil, mais une clé : proposer de l'activer, ici même.
-          if (r.absente && lire(CLE_STOCKAGE) && !sessionGardee() && EMP.reglee !== false) EMP.offre = true;
-          return [r.msg, 'ko'];
-        }
-        if (!fond) return null;
-        return agir('valider', id, el, {}, { enCours: 'Mise en ligne…', echec: 'Mise en ligne pas partie : ',
-          ok: function () { return ['Mise en ligne lancée : Claude fusionne la PR, attend que ce soit en ligne et vérifie le site. Le résultat arrivera ici.', 'ok']; } })
-          .then(function (m) { return m && m.empreinte ? (pose ? ['Le relais demande encore ton empreinte : réessaie.', 'ko'] : lancer(true)) : m; });
-      });
-    }
-    lancer(false).then(function (m) { if (m) apresAction(m); else if (fond) el.disabled = false; });
+    if (!aAcces() || !id) return;
+    agir('valider', id, el, {}, { enCours: 'Mise en ligne…', echec: 'Mise en ligne pas partie : ',
+      ok: function () { return ['Mise en ligne lancée : Claude fusionne la PR, attend que ce soit en ligne et vérifie le site. Le résultat arrivera ici.', 'ok']; } }).then(apresAction);
   }
   // « Annuler » se garde appuyé 1,2 s (doigt, souris ou clavier) : un toucher trop court ne fait rien, il dit comment faire.
   // Pendant l'appui, RIEN ne bouge au-dessus du bouton (le bouton qui se remplit suffit) : un message écrit dans .sgn-etat
@@ -1963,8 +1939,8 @@
       etat.appendChild(document.createTextNode(' ')); etat.appendChild(b);
     }
     [].forEach.call(fond.querySelectorAll('[data-tenir]'), brancherTenir);
-    // Le défi de l’empreinte demandé d’avance : pour « Se connecter avec l’empreinte », ou « Mettre en ligne » sans être connecté.
-    if (fond.querySelector('.sgn-acces [data-a="empreinte"]') || (fond.querySelector('[data-a="valider"]') && !sessionGardee())) prechargerDefi();
+    // Le défi de l’empreinte demandé d’avance, pour « Se connecter avec l’empreinte ».
+    if (fond.querySelector('.sgn-acces [data-a="empreinte"]')) prechargerDefi();
     if (fond.querySelector('.sgn-offre')) prechargerInscription();
     if (vue === 'signaler') {
       brancherDessin();

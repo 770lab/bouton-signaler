@@ -1575,7 +1575,7 @@ test('POST /demandes/<réf>/verifier · /deverifier : la marque « À vérifier 
   assert.ok(Number(lireDemande(env, a.ref).regleeLeMs) > 0, '« Réglé » reste');
 });
 
-test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forcément fraîche), à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
+test('POST /demandes/<réf>/valider : la clé d’équipe ou une session suffit (sans empreinte), à valider avec sa PR, jamais Avinou Malkenou ; travail VALIDER', async () => {
   const env = envAuth(), R = routine(), A = await appareil(-7);
   const { j: ins } = await inscrire(env, A);
   await appel(env, null, 'POST', '/etat', { corps: { projet: 'home', mode: 'valider' } });
@@ -1586,14 +1586,12 @@ test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forc
     images: { avant: PNG_1x1, apres: PNG_B } });
   const pub = (await (await appel(env, null, 'GET', '/demandes')).json()).demandes.find((x) => x.id === a.ref);
   assert.deepEqual(pub.actions, ['valider']);
-  // La clé seule ne suffit pas (403, pas 401 : la page propose la connexion par empreinte).
-  let rep = await appel(env, R, 'POST', chemin);
-  assert.equal(rep.status, 403); assert.equal((await rep.json()).empreinte, true);
-  assert.equal(R.appels.length, 1);
-  rep = await appel(env, R, 'POST', chemin, { cle: CLE_PAUL, entetes: {} });
+  // La demande d'un autre : 404 (paul n'y touche pas avec SA clé).
+  let rep = await appel(env, R, 'POST', chemin, { cle: CLE_PAUL, entetes: {} });
   assert.equal(rep.status, 404, 'paul : pas la sienne');
+  assert.equal(R.appels.length, 1);
 
-  // Connecté par l'empreinte suffit, même il y a plus de 5 minutes : pas de seconde empreinte (choix du propriétaire, 2026-10-21).
+  // Une session suffit aussi, même d'une empreinte d'il y a plus de 5 minutes (la clé seule : le test suivant).
   const c = await connecter(env, A);
   const vieille = await C.signerSession(C.nouvelleSession({ qui: 'marie', app: A.id, rp: '770lab.com', quand: Date.now(), uv: Date.now() - 6 * 60 * 1000 }), SECRET);
   rep = await appel(env, R, 'POST', chemin, { cle: null, entetes: bearer(vieille) });
@@ -1601,7 +1599,7 @@ test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forc
   assert.equal(rep.status, 200, JSON.stringify(j)); assert.equal(j.demande.etat, 'en_cours_validation');
   const t = R.appels[1].corps.text;
   assert.ok(t.startsWith(C.MARQUE_VALIDER + '\n'));
-  assert.ok(t.includes('Validé avec son empreinte par : marie'));
+  assert.ok(t.includes('Validé par : marie') && !/empreinte/i.test(t.split('\n')[1]));
   assert.ok(t.includes('PR À FUSIONNER') && t.includes('  - https://github.com/770lab/home/pull/12') && !t.includes('  - https://770lab.com/home/'));
   assert.match(t, /"etat":"en_ligne"/);
   const neuf = jetonDe(t);
@@ -1620,6 +1618,30 @@ test('POST /demandes/<réf>/valider : session de l’empreinte exigée (pas forc
   const sansPr = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
   await retourDe(env, { id: sansPr.ref, cle: jetonDe(R.appels[R.appels.length - 1].corps.text), etat: 'a_valider', liens: [] });
   assert.equal((await appel(env, R, 'POST', '/demandes/' + sansPr.ref + '/valider', { cle: null, entetes: bearer(c.j.session) })).status, 409);
+});
+
+test('« Mettre en ligne » : accepté avec la clé d’équipe seule (sans empreinte ni session, l’empreinte pourtant réglée), refusé sans clé', async () => {
+  const env = envAuth(), R = routine();
+  await appel(env, null, 'POST', '/etat', { corps: { projet: 'home', mode: 'valider' } });
+  const a = await envoyer(env, R, {}, { contexte: { url: PAGES.home } });
+  await retourDe(env, { id: a.ref, cle: jetonDe(R.appels[0].corps.text), etat: 'a_valider', liens: ['https://github.com/770lab/home/pull/12'] });
+  const chemin = '/demandes/' + a.ref + '/valider';
+  // Sans clé ni session, avec une mauvaise clé, ou une session illisible sans clé : 401, rien ne part, la demande attend toujours.
+  for (const o of [{ cle: null }, { cle: 'pas-la-bonne-cle-0000' }, { cle: null, entetes: bearer('pas.une-session') }]) {
+    const rep = await appel(env, R, 'POST', chemin, o);
+    assert.equal(rep.status, 401, JSON.stringify(o)); assert.equal((await rep.json()).cle, true);
+  }
+  assert.equal(R.appels.length, 1); assert.equal(lireDemande(env, a.ref).etat, 'a_valider');
+  // La clé d'équipe seule : le travail VALIDER part (choix du propriétaire, 2026-10-22).
+  const rep = await appel(env, R, 'POST', chemin);
+  const j = await rep.json();
+  assert.equal(rep.status, 200, JSON.stringify(j)); assert.equal(j.ok, true); assert.equal(j.demande.etat, 'en_cours_validation');
+  assert.equal(R.appels.length, 2);
+  const t = R.appels[1].corps.text;
+  assert.ok(t.startsWith(C.MARQUE_VALIDER + '\n')); assert.ok(t.includes('Validé par : marie'));
+  assert.ok(t.includes('  - https://github.com/770lab/home/pull/12'));
+  // Un second toucher ne relance rien : la mise en ligne est déjà en cours.
+  assert.equal((await appel(env, R, 'POST', chemin)).status, 409); assert.equal(R.appels.length, 2);
 });
 
 // ——— Une nouvelle clé d'équipe depuis le pupitre (POST /auth/cle/nouvelle) ———
@@ -1828,7 +1850,7 @@ test('POST /auth/cle/nouvelle avec le stockage R2 ; sans stockage, la clé de CL
 });
 
 // ——— Les appareils de confiance : une clé d'équipe volée inscrit un appareil, jamais un appareil qui crée une clé ———
-// (Mettre en ligne : tout appareil inscrit, avec une session d'empreinte, depuis le choix du propriétaire du 2026-10-21.)
+// (Mettre en ligne : la clé d'équipe suffit, donc tout appareil inscrit aussi, depuis le choix du propriétaire du 2026-10-22.)
 
 const PAS_DE_CONFIANCE_CLE = { ok: false, confiance: true, erreur: 'Cet appareil a été ajouté avec la clé d’équipe seule : une nouvelle clé se crée avec l’empreinte d’un appareil de confiance (ton téléphone).' };
 
