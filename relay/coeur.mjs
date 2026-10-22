@@ -13,7 +13,8 @@
 // le MODE de chaque projet (direct / à valider), les DEUX abonnements Claude (et le passage de l'un à l'autre), le journal de la
 // page et les éléments entourés recopiés dans le texte de la routine, les travaux ANNULER / VALIDER écrits par le relais, les
 // clés d'équipe créées depuis le pupitre (« Nouvelle clé », avec l'empreinte) et les appareils DE CONFIANCE (une clé d'équipe
-// seule inscrit un appareil, jamais un appareil qui crée une clé ou met en ligne).
+// seule inscrit un appareil, jamais un appareil qui crée une clé). « Mettre en ligne » : la clé d'équipe suffit (choix du
+// propriétaire, 2026-10-22 : l'empreinte sert à se connecter, plus à valider).
 
 export const LIMITES = {
   texte: 4000,              // le texte écrit ou dicté
@@ -38,7 +39,7 @@ export const LIMITES = {
   authOctets: 65_536,       // le corps des routes /auth (une attestation avec ses certificats tient en quelques Ko)
   defiDureeS: 300,          // un défi WebAuthn vaut 5 minutes, une seule fois
   sessionDureeMs: 30 * 24 * 3600 * 1000, // une session (après l'empreinte) vaut 30 jours (choix du propriétaire, 2026-10-21 ; 12 h avant)
-  fraicheMs: 5 * 60 * 1000, // « empreinte fraîche » : posée il y a 5 minutes au plus (mettre en ligne)
+  fraicheMs: 5 * 60 * 1000, // « empreinte fraîche » : posée il y a 5 minutes au plus (nouvelle clé)
   appareils: 20,            // appareils (clés d'accès) par personne
   appareilIdOctets: 255,    // l'identifiant d'une clé d'accès (une clé KV fait 512 octets au plus)
   renvoiApresMs: 15 * 60 * 1000, // une demande « en cours » sans nouvelle depuis 15 minutes peut être renvoyée
@@ -778,7 +779,7 @@ export const projetDeLaDemande = (d) => (d && estProjet(d.projet) ? d.projet
 
 // LE MODE DE CHAQUE PROJET : « direct » (la routine corrige, fusionne dans main, attend que ce soit en ligne : « en ligne », avec
 // les captures avant / après et de quoi annuler) ou « valider » (elle ouvre la PR et s'arrête : « à valider » ; le propriétaire met
-// en ligne d'un geste, avec son empreinte). Par défaut : direct pour Home, le pupitre et HavroutIA ; à valider pour Avinou Malkenou,
+// en ligne d'un geste, avec sa clé d'équipe ou sa session). Par défaut : direct pour Home, le pupitre et HavroutIA ; à valider pour Avinou Malkenou,
 // qui ne passe JAMAIS en direct (ses règles : son propriétaire met en ligne lui-même, depuis son Mac / son coffre) ; KOULAM a sa
 // propre bulle et sa propre routine (en direct) : son mode ne se règle pas ici. Une page d'aucun projet : à valider.
 export const MODES = Object.freeze(['direct', 'valider']);
@@ -872,7 +873,7 @@ export const nomDuProjet = (id) => { const p = PROJETS.find((x) => x.id === id);
 
 // ——— LES TRAVAUX ÉCRITS PAR LE RELAIS : ANNULER et VALIDER ———
 // Le texte que reçoit la routine quand le propriétaire touche « Annuler » (une demande en ligne) ou « Mettre en ligne » (une
-// demande à valider, après son empreinte). Sa PREMIÈRE ligne, écrite par le relais, dit le travail ; ce qui vient d'une session
+// demande à valider). Sa PREMIÈRE ligne, écrite par le relais, dit le travail ; ce qui vient d'une session
 // d'avant (résumé, titre de page) y est une donnée, neutralisée comme le texte d'une personne. Le bloc RETOUR (avecRetour, avec
 // `travail`) s'ajoute à la fin. Purs.
 export const MARQUE_ANNULER = 'TRAVAIL : ANNULER UNE MISE EN LIGNE (écrit par le relais, pas par la personne)';
@@ -901,7 +902,7 @@ export function texteAnnuler(o) {
 }
 export function texteValider(o) {
   const d = o.d, L = [MARQUE_VALIDER];
-  L.push('Validé avec son empreinte par : ' + (o.qui || '?') + ' · le ' + new Date(o.quand || Date.now()).toISOString());
+  L.push('Validé par : ' + (o.qui || '?') + ' · le ' + new Date(o.quand || Date.now()).toISOString());
   enteteTravail(L, o);
   L.push('', 'PR À FUSIONNER (squash, dans la branche principale) :');
   prsDe(d.liens).forEach((l) => L.push('  - ' + l));
@@ -1219,8 +1220,8 @@ export const appareilValide = (ap, id) => !!(ap && typeof ap === 'object' && !ap
 // ce qu'il est, et c'est lui qui pose le drapeau UV) et reçoit aussitôt une session à empreinte fraîche. Cette session ne doit pas
 // suffire à créer une nouvelle clé d'équipe (POST /auth/cle/nouvelle : l'ancienne cesserait de marcher, le propriétaire serait
 // enfermé dehors, et le Terminal ne le sauverait pas : l'intrus, toujours inscrit, recréerait une clé). Ce geste exige un appareil
-// DE CONFIANCE, c'est-à-dire inscrit (mettre en ligne, POST /demandes/<réf>/valider, ne l'exige plus : choix du propriétaire du
-// 2026-10-21, « un système plus simple ») :
+// DE CONFIANCE, c'est-à-dire inscrit (mettre en ligne, POST /demandes/<réf>/valider, n'exige ni confiance ni empreinte : la clé
+// d'équipe suffit, choix du propriétaire du 2026-10-22) :
 //   - avec la session d'un appareil de confiance ;
 //   - ou avec la clé seule quand la personne n'avait encore JAMAIS eu d'appareil (sa liste « appareils:<nom> » n'existe pas encore ;
 //     retirer tous ses appareils ne rouvre pas cette porte : la liste reste, vide) ;
@@ -1248,7 +1249,7 @@ export const appareilsSans = (ids, id) => (Array.isArray(ids) ? ids : []).filter
 // app (l'identifiant de l'appareil), rp, iat, exp (iat + 30 jours), uv (l'heure de l'empreinte) } — heures en millisecondes. Valable si
 // la signature est juste (comparée en temps constant) et pas expirée ; le relais vérifie EN PLUS, à chaque usage, que l'appareil
 // existe toujours (retiré = ses sessions ne valent plus rien) et que la personne a toujours une clé dans CLES (retirer quelqu'un de
-// CLES retire aussi ses appareils). « Fraîche » : l'empreinte date de 5 minutes au plus (mettre en ligne).
+// CLES retire aussi ses appareils). « Fraîche » : l'empreinte date de 5 minutes au plus (nouvelle clé).
 export const secretSessionValide = (s) => typeof s === 'string' && s.trim().length >= 32;
 async function hmac(secret, texte) {
   const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(secret).trim()), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);

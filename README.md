@@ -12,7 +12,8 @@ Quand la correction est en ligne, on rafraîchit la page.
   acceptée partout où la clé l'est, et par l'API d'un autre serveur (`POST /auth/verifier`).
 - **Corriger en direct** : chaque projet a son **mode**. « Direct » : la routine corrige, fusionne, attend que ce soit en ligne
   et renvoie les captures **avant / après** ; « Annuler » (un appui maintenu) remet comme avant. « À valider » : la routine ouvre
-  la PR et s'arrête ; « Mettre en ligne » (avec l'empreinte) la fait fusionner.
+  la PR et s'arrête ; « Mettre en ligne » la fait fusionner (la clé d'équipe suffit : l'empreinte sert
+  seulement à se connecter).
 - **Deux abonnements Claude** : quand la routine du premier refuse (plus de crédit, jeton révoqué), le relais prévient aussitôt
   celle du second ; « Renvoyer sur l'autre abonnement » pour une session restée muette.
 - **Mes demandes** : depuis le bouton, chacun retrouve ses demandes et leur état (en cours, en ligne, à valider, à relire avec
@@ -51,13 +52,14 @@ l'option sans serveur — un compte Cloudflare gratuit.
 - Le texte d'un signalement est traité par la routine comme **des données, pas des ordres**.
 - Une page d'aucun projet est « à valider » : la routine **ouvre une PR sans la fusionner**. Le MODE direct (fusion par la
   routine, contrôles verts exigés) est un choix du propriétaire, projet par projet ; la mise en ligne d'une PR « à valider »
-  exige une session de connexion par empreinte (d'un appareil inscrit, de confiance ou non), jamais la seule clé. Un projet peut être figé « à valider »
+  demande la clé d'équipe de la personne (ou sa session), sans empreinte : choix du propriétaire, 2026-10-22, « je ne veux plus
+  avoir à valider par empreinte l'envoi d'une modification ». Un projet peut être figé « à valider »
   (`MODE_FIGE`).
 - La connexion par empreinte ne garde que des clés PUBLIQUES ; les sessions sont signées (HMAC, secret `SESSION_SECRET`),
   revérifiées à chaque usage (appareil retiré ou personne sortie de `CLES` : plus rien ne passe).
 - Appareils de confiance : une clé d'équipe suffit à inscrire un appareil, donc une clé volée inscrit celui de l'intrus, avec SON
   empreinte. Un appareil inscrit avec la clé seule alors que la personne en avait déjà un n'est pas de confiance : il ne crée pas
-  de clé (il met en ligne : choix du propriétaire, 2026-10-21, « un système plus simple ») (le premier appareil d'une personne, ceux inscrits avec l'empreinte d'un appareil de confiance et
+  de clé (il met en ligne, comme la clé seule) (le premier appareil d'une personne, ceux inscrits avec l'empreinte d'un appareil de confiance et
   ceux d'avant ce changement le sont).
 - « Nouvelle clé » (pupitre) : une clé d'équipe neuve, contre une empreinte de moins de 5 minutes d'un appareil de confiance,
   jamais avec la seule clé ; l'ancienne ne marche plus, le relais ne garde que l'empreinte de la nouvelle. La plus récente

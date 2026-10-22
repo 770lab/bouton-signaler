@@ -117,7 +117,7 @@ l'empreinte sous `cle:<nom>`, avec celle de la clé que `CLES` donnait alors à 
 
 **Appareil de confiance.** Une clé d'équipe suffit à inscrire un appareil (« Ajouter cet appareil ») : quelqu'un qui a volé la
 clé peut donc inscrire LE SIEN et poser son propre doigt. Pour qu'il ne puisse pas créer une clé (l'ancienne cesserait de marcher
-partout), le relais distingue les appareils de confiance (mettre en ligne ne l'exige plus : choix du propriétaire, 2026-10-21). Est de confiance un appareil inscrit :
+partout), le relais distingue les appareils de confiance (mettre en ligne n'exige ni confiance ni empreinte : la clé d'équipe suffit, choix du propriétaire, 2026-10-22). Est de confiance un appareil inscrit :
 - avec la connexion par empreinte d'un appareil de confiance ;
 - ou avec la clé seule quand la personne n'avait encore jamais eu d'appareil (son premier ; retirer tous ses appareils ne rouvre
   pas cette porte) ;
@@ -241,9 +241,9 @@ Avec un stockage (Workers KV ou R2), le relais garde chaque demande et son état
   clé ou session ; `actif` peut s'y ajouter).
 - **Annuler** : `POST /demandes/<réf>/annuler` (la sienne, `en_ligne` avec `annulation`, jamais `avinou` : `409`) → l'état
   `en_cours_annulation` et un travail ANNULER écrit par le relais (git revert des commits donnés, en ligne, RETOUR `annulee`).
-  **Mettre en ligne** : `POST /demandes/<réf>/valider` (la sienne, `a_valider` avec une PR GitHub, jamais `avinou` : `409`) exige
-  une SESSION dont l'empreinte date de 5 minutes au plus (sinon `403` avec `empreinte: true` : la page refait l'empreinte), d'un
-  appareil de confiance (sinon `403` avec `confiance: true`, étape 3) →
+  **Mettre en ligne** : `POST /demandes/<réf>/valider` (la sienne, `a_valider` avec une PR GitHub, jamais `avinou` : `409`) demande
+  la clé d'équipe ou une session, comme « Annuler », sans empreinte (choix du propriétaire, 2026-10-22 ; sans clé ni session :
+  `401`) →
   `en_cours_validation` et un travail VALIDER (fusion, en ligne, RETOUR `en_ligne` avec `annulation`). Si la routine ne part pas,
   la demande garde son état (`en_ligne` / `a_valider`) avec la raison dans `erreur`, et la réponse est `502`.
 - **Deux abonnements** (`ROUTINE_URL` / `ROUTINE_JETON`, puis `ROUTINE_URL_2` / `ROUTINE_JETON_2`) : le relais prévient d'abord

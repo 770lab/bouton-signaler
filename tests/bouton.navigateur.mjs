@@ -1409,13 +1409,13 @@ try {
   ok(c4.pil === 'en cours' && c4.meta.endsWith(' · via abonnement 2') && !c4.rangs.flat().some((t) => /Renvoyer/.test(t)), 'prise par l’abonnement 2 (le 1 sans crédit), en cours depuis peu : pas de « Renvoyer »');
   ok((await Dp.p.$$eval('.sgn-filtre', (l) => l.map((x) => x.textContent.replace(/\s+/g, ' ').trim()))).join(' | ').includes('À traiter 2') && (await Dp.p.textContent('.sgn-badge')) === '2',
     '« À traiter » compte les deux modifications à valider (le nombre du rond aussi)');
-  // « Mettre en ligne » avec une empreinte fraîche (posée à l'instant) : pas redemandée.
+  // « Mettre en ligne », connecté par l'empreinte à l'instant : pas d'empreinte de plus.
   let n0 = (await ctl('appels')).length;
   await Dp.p.tap('.sgn-carte[data-id="' + R1 + '"] [data-a="valider"]');
   await etatDit(Dp.p, /^Mise en ligne lancée/);
   let av = (await ctl('appels')).slice(n0);
-  ok((await webauthn(Dp.p)).get === 1 && av.length === 1 && av[0].text.startsWith(Coeur.MARQUE_VALIDER) && av[0].text.includes(PR(77)) && av[0].text.includes('Validé avec son empreinte par : marie'),
-    '« Mettre en ligne » (empreinte de moins de 5 min) : pas d’empreinte de plus ; la routine reçoit le travail VALIDER avec la PR');
+  ok((await webauthn(Dp.p)).get === 1 && av.length === 1 && av[0].text.startsWith(Coeur.MARQUE_VALIDER) && av[0].text.includes(PR(77)) && av[0].text.includes('Validé par : marie'),
+    '« Mettre en ligne » (connecté par l’empreinte) : pas d’empreinte de plus ; la routine reçoit le travail VALIDER avec la PR');
   c1 = await carteVue(Dp.p, R1);
   ok(c1.pil === 'mise en ligne en cours' && !c1.rangs.flat().includes('Mettre en ligne'), 'la carte passe à « mise en ligne en cours »');
   await versCarte(Dp.p, R1);
@@ -1460,7 +1460,7 @@ try {
   await Dp.p.tap('.sgn-vis [data-v="fermer"]');
   ok(!(await Dp.p.$('.sgn-vis')) && (await Dp.p.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-k'))) === 'apres', '« Fermer » aussi ; le focus revient sur la vignette');
   // Connecté par l'empreinte il y a plus de 5 minutes : « Mettre en ligne » part TOUT DE SUITE, sans seconde empreinte
-  // (choix du propriétaire, 2026-10-21 : la session de l'empreinte suffit, la page et le relais d'accord).
+  // (choix du propriétaire, 2026-10-22 : la clé ou la session suffit, la page et le relais d'accord).
   const R5 = (await signalerNode('Le menu se ferme tout seul.')).ref;
   await retourDe(R5, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(78)], images: { avant: AVANT, apres: APRES } });
   await ctl('decalage', { ms: 6 * 60000 });
@@ -1531,7 +1531,9 @@ try {
   await ctl('decalage', { ms: 0 });
   await Dp.ctx.close();
 
-  // f) Un ordinateur qui a la clé, son empreinte, mais pas de clé d'accès pour ce site : « Mettre en ligne » propose de l'activer.
+  // f) Un ordinateur qui n'a que la clé d'équipe (ni session, ni clé d'accès pour ce site ; l'empreinte pourtant réglée sur le
+  // relais) : « Mettre en ligne » part TOUT DE SUITE, sans demander l'empreinte (choix du propriétaire, 2026-10-22 : l'empreinte
+  // sert à se connecter, plus à valider).
   const R7 = (await signalerNode('La date est en anglais.')).ref;
   await retourDe(R7, { etat: 'a_valider', resume: 'Corrigé dans une PR.', liens: [PR(80)], images: { avant: AVANT, apres: APRES } });
   const E = await surVrai({ width: 768, height: 1024 }, { cle: CLE, theme: 'dark' });
@@ -1539,20 +1541,18 @@ try {
   await E.p.waitForSelector('.sgn-fab');
   await E.p.evaluate(() => window.Signaler.demandes('toutes'));
   await E.p.waitForSelector('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]', { timeout: 10000 });
-  await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
-  await etatDit(E.p, /pas encore activée sur cet appareil/);
-  ok(!!(await E.p.waitForSelector('.sgn-offre', { timeout: 3000 }).catch(() => null)) && (await webauthn(E.p)).get === 1, 'pas de clé d’accès pour ce site : on le dit, et « Activer l’empreinte sur cet appareil ? » est proposé dans la liste');
   pb11 = await controler(E.p);
-  await capture(E.p, 'sans-empreinte-768-dark.png');
-  await E.p.click('[data-a="activer"]');
-  // marie a déjà eu un appareil (plus haut) : celui-ci, ajouté avec la clé seule, n'est pas de confiance (une clé volée suffirait à
-  // l'ajouter). Il se connecte, envoie ET met en ligne (choix du propriétaire, 2026-10-21) ; seule « Nouvelle clé » lui est refusée.
-  await etatDit(E.p, /^Empreinte activée sur cet appareil : la prochaine fois, elle suffira\.$/);
+  await capture(E.p, 'cle-seule-a-valider-768-dark.png');
   n0 = (await ctl('appels')).length;
+  j0 = (await requetes()).length;
   await E.p.click('.sgn-carte[data-id="' + R7 + '"] [data-a="valider"]');
   await etatDit(E.p, /^Mise en ligne lancée/);
-  ok((await webauthn(E.p)).create === 1 && (await webauthn(E.p)).get === 1 && (await ctl('appels')).slice(n0).some((x) => x.text.startsWith(Coeur.MARQUE_VALIDER)),
-    'activée avec la clé seule (marie avait déjà un appareil) : « Mettre en ligne » part quand même (travail VALIDER), sans empreinte de plus');
+  av = (await ctl('appels')).slice(n0);
+  suite = (await requetes()).slice(j0).filter((x) => x.m === 'POST').map((x) => x.p.replace(R7, '<réf>') + ' (' + x.par + ')');
+  ok((await webauthn(E.p)).get === 0 && (await webauthn(E.p)).create === 0 && !(await sessionDe(E.p)) && suite.join(', ') === '/demandes/<réf>/valider (cle)'
+    && av.length === 1 && av[0].text.startsWith(Coeur.MARQUE_VALIDER) && av[0].text.includes(PR(80)) && av[0].text.includes('Validé par : marie'),
+    'la clé d’équipe seule : « Mettre en ligne » part (travail VALIDER), sans aucune empreinte demandée (' + suite.join(', ') + ')');
+  ok(!(await E.p.$('.sgn-offre')) && !/empreinte/i.test(await texte(E.p, '.sgn-etat')), 'et rien ne parle d’empreinte à ce moment-là');
   await capture(E.p, 'cle-seule-met-en-ligne-768-dark.png');
   // « Annuler » à la souris : garder le bouton appuyé.
   ok((await retourDe(R7, { etat: 'en_ligne', resume: 'En ligne.', annulation: { depot: '770lab/home', commits: ['fedcba987654'] } })).ok, 'retour « en ligne »');
