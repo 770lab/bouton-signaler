@@ -34,6 +34,10 @@ dans la conversation ; le secret des sessions (`SESSION_SECRET`) non plus.
   connaissance de cause (chaque signalement pourra changer le site en ligne sans relecture humaine ; « Annuler » le remet comme
   avant) ; ne l'active pas de toi-même.
 - Respecte les règles du projet (CLAUDE.md, AGENTS.md, CONTRIBUTING) : branche, PR, tests.
+- Les règles du bouton (`CLAUDE.md` de ce dépôt) viennent avec lui : la même fenêtre partout, seule la couleur change (celle de la
+  page), le rond orange de Claude, l'avant / après en image avant toute mise en ligne d'un changement qui se voit. Ajoute au
+  `CLAUDE.md` du projet (crée-le s'il n'existe pas) une section courte qui les reprend et pointe vers
+  https://github.com/770lab/bouton-signaler/blob/main/CLAUDE.md ; ne recopie pas le reste de ce dépôt.
 
 ## 1. Le bouton dans la page
 
@@ -49,6 +53,9 @@ dans la conversation ; le secret des sessions (`SESSION_SECRET`) non plus.
      <script>window.SignalerConfig = { utilisateur: () => window.monAppli?.utilisateur?.email || '' };</script>
      ```
    - Pour ne montrer le bouton qu'à l'équipe : `window.SignalerConfig = { visible: () => estMembreDeLEquipe() }`.
+   - La couleur : rien à faire, la fenêtre prend celle de la page (sa variable `--accent` / `--primary`, son bouton principal, ses
+     liens…) et son fond clair ou sombre. Ouvre la fenêtre sur la page et vérifie ; si la couleur n'est pas la bonne, donne-la :
+     `data-couleur="#1d64d8"` (ou `--signaler-couleur` dans le CSS de la page). Ne recolore jamais la fenêtre par du CSS.
 4. **CSP** : si le projet a une Content-Security-Policy, ajoute l'adresse du relais à `connect-src`, et soit
    `https://cdnjs.cloudflare.com` à `script-src`, soit héberge html2canvas 1.4.1 toi-même et passe `data-html2canvas="/html2canvas.min.js"`.
 5. Framework à rendu côté serveur (Next.js, Nuxt…) : charge le script côté client seulement (`next/script` en `afterInteractive`, etc.).

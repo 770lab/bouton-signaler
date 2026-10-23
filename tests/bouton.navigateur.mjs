@@ -292,7 +292,8 @@ async function page(taille, o = {}) {
   // o.dataProjet : l'attribut data-projet posé sur la balise du bouton (par le site) · o.csp : la CSP des images du pupitre
   await p.goto((o.origine || ORIGINE) + (o.chemin || '/demo/index.html') + '?relais=' + encodeURIComponent(o.relais || RELAIS)
     + (o.projet ? '&projet=' + encodeURIComponent(o.projet) : '') + (o.dataProjet ? '&dataProjet=' + encodeURIComponent(o.dataProjet) : '')
-    + (o.csp ? '&csp=' + (o.csp === true ? 'img' : o.csp) : ''));
+    + (o.csp ? '&csp=' + (o.csp === true ? 'img' : o.csp) : '') + (o.couleur ? '&couleur=' + encodeURIComponent(o.couleur) : '')
+    + (o.fenetre ? '&theme=' + encodeURIComponent(o.fenetre) : ''));
   return { p, ctx, erreursPage };
 }
 const texte = async (p, sel) => ((await p.textContent(sel)) || '').replace(/\s+/g, ' ').trim();
@@ -745,6 +746,71 @@ try {
       await x.ctx.close();
     }
   }
+  console.log('7 bis. La couleur de la page (23/10/2026, Yoann : « juste pour la couleur, il prend celle de la page où il se trouve »)');
+  {
+    const lum = (h) => { const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+    const contraste = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const enHex = (rgb) => '#' + (rgb.match(/\d+/g) || []).slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
+    // Ouvre la fenêtre et rend sa couleur : les liens, le bouton « Envoyer à Claude », son texte, le fond.
+    const ouvrirEtLire = async (p) => {
+      await p.click('.sgn-fab', { position: { x: 24, y: 30 } });
+      await p.waitForSelector('.sgn-v img', { timeout: 15000 });
+      return p.evaluate(() => {
+        const cs = (s, k) => getComputedStyle(document.querySelector(s))[k];
+        return { lien: cs('.sgn-tete .sgn-lien', 'color'), plein: cs('.sgn-envoyer', 'backgroundColor'), texte: cs('.sgn-envoyer', 'color'),
+          fond: cs('.sgn-boite', 'backgroundColor'), choix: cs('.sgn-type[aria-pressed="true"]', 'borderTopColor'), teinte: window.Signaler.teinte() };
+      });
+    };
+    // a) Rien à lire sur la page (la démo n'a ni variable ni bouton plein) : le bleu du modèle, comme l'Atelier 770LAB.
+    remettre();
+    let x = await page({ width: 412, height: 915 }, { cle: CLE });
+    let c = await ouvrirEtLire(x.p);
+    ok(enHex(c.plein) === '#2563eb' && enHex(c.lien) === '#2563eb' && enHex(c.texte) === '#ffffff' && enHex(c.fond) === '#ffffff',
+      'page sans couleur : le bleu du modèle (' + enHex(c.plein) + ', texte ' + enHex(c.texte) + ')');
+    await x.p.keyboard.press('Escape');
+    // b) La page a une variable --accent (orange) : le bouton plein la prend telle quelle ; les liens, assombris juste assez, se lisent.
+    await x.p.evaluate(() => document.documentElement.style.setProperty('--accent', '#d97757'));
+    await x.p.waitForTimeout(2100);   // la couleur lue est gardée 2 s
+    c = await ouvrirEtLire(x.p);
+    ok(enHex(c.plein) === '#d97757' && enHex(c.choix) === enHex(c.lien) && contraste(enHex(c.lien), '#ffffff') >= 4.5 && contraste(enHex(c.texte), '#d97757') >= 3,
+      '--accent orange : « Envoyer à Claude » ' + enHex(c.plein) + ', liens ' + enHex(c.lien) + ' (contraste ' + contraste(enHex(c.lien), '#ffffff').toFixed(2) + '), texte ' + enHex(c.texte));
+    await capture(x.p, 'couleur-accent-orange.png');
+    await x.p.keyboard.press('Escape');
+    // c) Une couleur claire (jaune) : le bouton reste jaune, son texte devient presque noir.
+    await x.p.evaluate(() => document.documentElement.style.setProperty('--accent', '#facc15'));
+    await x.p.waitForTimeout(2100);
+    c = await ouvrirEtLire(x.p);
+    ok(enHex(c.plein) === '#facc15' && enHex(c.texte) === '#0f172a' && contraste(enHex(c.lien), '#ffffff') >= 4.5,
+      '--accent jaune : le bouton reste jaune, texte presque noir, liens lisibles (' + enHex(c.lien) + ')');
+    await x.p.keyboard.press('Escape');
+    // d) Pas de variable, mais un bouton principal plein (vert) : sa couleur.
+    await x.p.evaluate(() => { document.documentElement.style.removeProperty('--accent'); document.body.insertAdjacentHTML('afterbegin', '<button class="btn-primary" style="background:#16a34a;color:#fff;padding:12px 20px;border:0">Valider</button>'); });
+    await x.p.waitForTimeout(2100);
+    c = await ouvrirEtLire(x.p);
+    ok(enHex(c.plein) === '#16a34a', 'bouton principal vert de la page : la fenêtre le prend (' + enHex(c.plein) + ')');
+    ok(!x.erreursPage.length, 'aucune erreur JavaScript' + (x.erreursPage.length ? ' — ' + x.erreursPage.join(' ; ') : ''));
+    await x.ctx.close();
+    // e) Le réglage `couleur` l'emporte sur la page ; `theme: 'sombre'` impose la fenêtre sombre sur une page claire.
+    remettre();
+    x = await page({ width: 412, height: 915 }, { cle: CLE, couleur: '#7c3aed', fenetre: 'sombre' });
+    c = await ouvrirEtLire(x.p);
+    ok(enHex(c.plein) === '#7c3aed' && enHex(c.fond) === '#0f172a' && c.teinte.sombre === true && contraste(enHex(c.lien), '#0f172a') >= 4.5,
+      'réglages couleur (violet) et theme sombre : appliqués (' + enHex(c.plein) + ', fond ' + enHex(c.fond) + ', liens ' + enHex(c.lien) + ')');
+    await x.ctx.close();
+    // f) Page sombre avec sa variable : fenêtre sombre, le bleu clair de la page, texte presque noir sur le bouton.
+    remettre();
+    x = await page({ width: 1280, height: 900 }, { cle: CLE, theme: 'dark', init: () => { document.addEventListener('DOMContentLoaded', () => document.documentElement.style.setProperty('--accent', '#5aa9ff')); } });
+    c = await ouvrirEtLire(x.p);
+    ok(c.teinte.sombre && enHex(c.fond) === '#0f172a' && enHex(c.plein) === '#5aa9ff' && enHex(c.texte) === '#0f172a',
+      'page sombre (--accent #5aa9ff) : fenêtre sombre, bouton ' + enHex(c.plein) + ', texte ' + enHex(c.texte));
+    await capture(x.p, 'couleur-page-sombre.png');
+    // g) La page passe en clair pendant que la fenêtre est ouverte : la fenêtre suit.
+    await x.p.emulateMedia({ colorScheme: 'light' });
+    await x.p.waitForFunction(() => getComputedStyle(document.querySelector('.sgn-boite')).backgroundColor === 'rgb(255, 255, 255)', null, { timeout: 3000 }).then(() => ok(true, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'), () => ok(false, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'));
+    ok(!x.erreursPage.length, 'aucune erreur JavaScript (page sombre)' + (x.erreursPage.length ? ' — ' + x.erreursPage.join(' ; ') : ''));
+    await x.ctx.close();
+  }
+
   console.log('8. Page absente des ORIGINES, relais pas à jour, relais éteint : on dit lequel (pas « injoignable » pour tout)');
   const LOCALE = 'http://localhost:' + site.address().port;   // le même site sous une autre adresse : absente des ORIGINES
   const eteint = http.createServer(); await new Promise((r) => eteint.listen(0, '127.0.0.1', r));
@@ -820,7 +886,7 @@ try {
     'https://koulam.app/tehilim': 'koulam', 'https://770lab.com/gescom/': 'gescom', 'https://www.770lab.com/GesCom/clients': 'gescom', 'https://770lab.com/': null, 'https://770lab.com/autre': null, 'https://exemple.fr/home/': null, 'pas une adresse': null, '': null };
   const fausses = Object.keys(REGLE).filter((u) => regle.r[u] !== REGLE[u]);
   ok(!fausses.length, 'Signaler.projetDeLaPage : le projet d’une adresse, comme le relais' + (fausses.length ? ' — faux : ' + fausses.map((u) => u + ' → ' + regle.r[u]).join(' ; ') : ''));
-  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,avinou=Avinou Malkenou,gescom=GesCom,koulam=KOULAM', 'Signaler.projets : les 6 projets, dans l’ordre du pupitre');
+  ok(regle.projets === 'home=Home,pupitre=Pupitre,havroutia=HavroutIA,veille=Veille,avinou=Avinou Malkenou,gescom=GesCom,koulam=KOULAM', 'Signaler.projets : les 7 projets, dans l’ordre du pupitre');
   await q0.ctx.close();
 
   remettre(); faux.projets.home = false;
