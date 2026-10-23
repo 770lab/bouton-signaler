@@ -6,6 +6,8 @@ Quand la correction est en ligne, on rafraîchit la page.
 
 - Fonctionne sur téléphone et sur ordinateur, dans n'importe quelle application web (HTML simple, React, Vue, Next.js…).
 - Plusieurs captures, import d'images, dictée du navigateur (ou note vocale jointe), dernières erreurs de la page jointes.
+- La même fenêtre sur toutes les pages, **dans la couleur de la page** : le bouton la lit tout seul (sa variable `--accent`, son
+  bouton principal, ses liens…), comme son fond clair ou sombre ; `data-couleur` pour la donner soi-même. Le rond reste orange.
 - Le jeton de la routine reste sur un petit **relais** (Cloudflare Worker gratuit, ou le serveur du projet) : jamais dans la page.
 - Seules les personnes qui ont une **clé d'équipe** peuvent envoyer un signalement ; une fois leur appareil inscrit, elles se
   connectent **par l'empreinte** (clés d'accès WebAuthn, vérifiées par le relais, sans bibliothèque) : une session de 30 jours,
@@ -43,6 +45,7 @@ l'option sans serveur — un compte Cloudflare gratuit.
 | `relay/coeur.mjs` | les règles du relais : clés, origines, limites, texte pour Claude (journal, éléments entourés, MODE), appel aux routines (deux abonnements), demandes et leur état, travaux ANNULER / VALIDER, interrupteurs et modes, connexion par empreinte (CBOR, COSE, signatures, sessions) |
 | `relay/cloudflare/` | le relais prêt à déployer (Worker + Workers KV, ou R2) |
 | `routine/consignes.md` | les consignes à coller dans la routine (MODE direct ou à valider, travaux ANNULER et VALIDER, captures avant / après) |
+| `CLAUDE.md` | les règles du bouton, par défaut partout où il est installé (le modèle de la fenêtre, la couleur de la page, l'avant / après en image, les copies à tenir ensemble) |
 | `INSTALL.md` | la procédure que suit Claude |
 | `demo/index.html` | une page de démonstration |
 | `tests/` | `npm test` : le relais (Node) puis le bouton dans un vrai Chromium (Playwright) |

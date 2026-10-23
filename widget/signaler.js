@@ -14,9 +14,19 @@
  *    visible        fonction : false pour cacher le bouton (ex. visiteurs non connectés)
  *    sansAlerte     fonction (adresse complète) : true pour une requête dont la page affiche déjà l'échec elle-même (le pupitre et
  *                   son Mac) ; elle reste dans la boîte noire, mais n'allume ni le point rouge ni la bulle
- *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'avinou', 'gescom', 'koulam') ; sans réglage, d'après son adresse
+ *    projet         le projet de la page ('home', 'pupitre', 'havroutia', 'veille', 'avinou', 'gescom', 'koulam') ; sans réglage, d'après son adresse
  *                   (Signaler.projetDeLaPage) : 770lab.com/home/robots… → pupitre, 770lab.com/home… → home,
  *                   770lab.com/havroutia… → havroutia, avinou-malkenou.web.app → avinou, koulam.app → koulam, sinon aucun
+ *    couleur        la couleur de la fenêtre (une couleur CSS, ou une fonction qui la rend) ; 'auto' (défaut) : celle de la page
+ *    theme          le fond de la fenêtre : 'auto' (défaut : clair ou sombre comme le fond de la page), 'clair' ou 'sombre'
+ *
+ *  LA FENÊTRE EST LA MÊME PARTOUT, SEULE SA COULEUR CHANGE (23/10/2026, Yoann, sur la fenêtre de l'Atelier 770LAB : « tous les boutons
+ *  Signaler alignés sur ce modèle, juste pour la couleur, il prend celle de la page où il se trouve »). La couleur (liens, « Envoyer à
+ *  Claude », le choix Bug / Idée, les filtres, la vignette choisie) : le réglage `couleur`, sinon une variable CSS de la page
+ *  (--signaler-couleur, --accent, --primary, --brand…), sinon le fond de son bouton principal, sinon la couleur de ses liens, sinon
+ *  sa theme-color, sinon le bleu du modèle. Elle est assombrie (fenêtre claire) ou éclaircie (fenêtre sombre) juste ce qu'il faut pour
+ *  se lire (contraste 4,5) ; un bouton plein garde la couleur exacte de la page, avec un texte blanc ou presque noir, le plus lisible.
+ *  Le fond de la fenêtre suit celui de la page (relu à chaque ouverture). Le rond garde l'orange de Claude sur toutes les pages.
  *
  *  Les interrupteurs du pupitre : un GÉNÉRAL et un PAR PROJET. Avant de montrer le rond, le bouton demande au relais s'il est
  *  coupé (GET /etat?projet=<id>, ou GET /etat pour une page d'aucun projet ; 4 s au plus) : « effectif: false » (le général ou
@@ -60,12 +70,13 @@
  *  Une erreur, ou une requête en échec (5xx, réseau), allume un point rouge sur le rond et une bulle « Le signaler ? » : une fois
  *  par erreur et par chargement de la page, seulement quand le rond est à l'écran ; les appels du bouton lui-même n'y comptent pas.
  *
- *  API : window.Signaler.ouvrir() · .cacher() · .montrer() · .demandes(filtre) · .projetDeLaPage(url) · .projets · .oublier()
+ *  API : window.Signaler.ouvrir() · .cacher() · .montrer() · .demandes(filtre) · .projetDeLaPage(url) · .projets · .oublier() · .teinte()
  *        filtre = 'toutes' | 'traiter' | 'cours' ; sans filtre : « À traiter » s'il y en a, sinon toutes.
  *        ou { projet: 'home' } / { projet: 'home', etat: 'traiter' } : les demandes de ce projet seulement (puce « Projet : Home × »
  *        au-dessus des filtres, qu'un toucher retire). Le projet d'une demande : son champ « projet », sinon l'adresse de sa page.
  *        oublier() : efface le brouillon, la liste gardée, la boîte noire et la capture en plein écran (pour l'écran verrouillé
  *        d'Avinou Malkenou) ; la clé et la connexion (la session) restent.
+ *        teinte() : { sombre, couleur, plein, texte } que la fenêtre prend de cette page, relue à l'instant (pour vérifier un réglage).
  *  Événement : window « signaler:demandes » { aTraiter, total, projets: { <id>: { aTraiter, total } } } à chaque liste lue
  *  (pour un compteur ailleurs dans la page).
  */
@@ -75,7 +86,7 @@
 
   var script = document.currentScript || null;
   var C = Object.assign({ position: 'bas-droite', html2canvas: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js' }, window.SignalerConfig || {});
-  if (script && script.dataset) ['endpoint', 'version', 'position', 'html2canvas', 'projet'].forEach(function (k) { if (script.dataset[k]) C[k] = script.dataset[k]; });
+  if (script && script.dataset) ['endpoint', 'version', 'position', 'html2canvas', 'projet', 'couleur', 'theme'].forEach(function (k) { if (script.dataset[k]) C[k] = script.dataset[k]; });
   var CLE_STOCKAGE = 'signaler_cle_v1', BROUILLON_CLE = 'signaler_brouillon_v1', POS_CLE = 'signaler_pos_v1';
   var ECRANS_MAX = 5, LARGEUR_MAX = 1600, HAUTEUR_MAX = 2600, JPEG_Q = 0.8, AUDIO_MAX_MS = 180000, ETAT_DELAI_MS = 4000;
   var APPUI_LONG_MS = 380, MARGE = 12, MARGE_HAUT = 16, POSITIONS_MAX = 40;          // le rond qu'on déplace
@@ -308,7 +319,7 @@
   // ── LES PROJETS : les mêmes que le relais (PROJETS de relay/coeur.mjs), dans l'ordre du pupitre ────────────────────────────
   // KOULAM n'envoie rien par ce relais (sa propre bulle, sa propre routine) : il est là pour l'interrupteur et les anciennes demandes.
   var PROJETS = [{ id: 'home', nom: 'Home' }, { id: 'pupitre', nom: 'Pupitre' }, { id: 'havroutia', nom: 'HavroutIA' },
-    { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'gescom', nom: 'GesCom' }, { id: 'koulam', nom: 'KOULAM' }];
+    { id: 'veille', nom: 'Veille' }, { id: 'avinou', nom: 'Avinou Malkenou' }, { id: 'gescom', nom: 'GesCom' }, { id: 'koulam', nom: 'KOULAM' }];
   // Le projet d'une page d'après son adresse, la même règle que le relais (projetDeLaPage de relay/coeur.mjs) ; null : aucun.
   function projetDeLaPage(url) {
     var u; try { u = new URL(String(url || '')); } catch (e) { return null; }
@@ -318,6 +329,7 @@
       if (chemin.indexOf('/home/robots') === 0) return 'pupitre';
       if (chemin.indexOf('/home') === 0) return 'home';
       if (chemin.indexOf('/havroutia') === 0) return 'havroutia';
+      if (chemin.indexOf('/veille') === 0) return 'veille';
       if (chemin.indexOf('/gescom') === 0) return 'gescom';
       return null;
     }
@@ -377,22 +389,23 @@
     + '.sgn-badge::after{content:"";position:absolute;inset:-8px}'
     + '.sgn-fab,.sgn-fab *,.sgn-badge,.sgn-fond,.sgn-fond *,.sgn-bulle,.sgn-bulle *,.sgn-vis,.sgn-vis *{font-style:normal}'
     // La bulle à côté du rond : « Un problème vient d’arriver… » (Signaler / Ignorer), ou un mot après « + Un autre écran ».
-    + '.sgn-bulle{--f:#fff;--t:#0f172a;--b:#e2e8f0;--a:#b9532f;position:fixed;left:0;top:0;z-index:2147483000;box-sizing:border-box;width:max-content;'
+    + '.sgn-bulle{--f:#fff;--t:#0f172a;--b:#e2e8f0;--a:var(--sgn-a,#2563eb);--p:var(--sgn-p,#2563eb);--sp:var(--sgn-sp,#fff);position:fixed;left:0;top:0;z-index:2147483000;box-sizing:border-box;width:max-content;'
     + 'max-width:min(300px,calc(100vw - 24px));padding:10px 12px;border-radius:12px;background:var(--f);color:var(--t);border:1px solid var(--b);'
     + 'box-shadow:0 12px 30px -10px rgba(15,23,42,.45);font:14px/1.4 ' + POLICE + ';animation:sgn-bulle .18s ease-out}'
-    + '@media (prefers-color-scheme:dark){.sgn-bulle{--f:#0f172a;--t:#f1f5f9;--b:#334155;--a:#e08a6a}}'
+    + '.sgn-bulle.sgn-sombre{--f:#0f172a;--t:#f1f5f9;--b:#334155}'
     + '@keyframes sgn-bulle{from{opacity:0;transform:translateY(6px)}}'
     + '@media (prefers-reduced-motion:reduce){.sgn-bulle{animation:none}}'
     + '.sgn-bulle p{margin:0}.sgn-bulle-r{display:flex;gap:8px;margin-top:8px}'
     + '.sgn-bulle button{flex:1 1 0;min-height:36px;padding:6px 10px;border-radius:10px;border:1px solid var(--b);background:transparent;color:var(--t);font:inherit;font-weight:600;cursor:pointer}'
-    + '.sgn-bulle .sgn-bulle-ok{background:#b9532f;border-color:#b9532f;color:#fff}'
-    + '.sgn-bulle button:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}'
+    + '.sgn-bulle .sgn-bulle-ok{background:var(--p);border-color:var(--p);color:var(--sp)}'
+    + '.sgn-bulle button:focus-visible{outline:3px solid var(--a);outline-offset:2px}'
     + '.sgn-fond{position:fixed;inset:0;z-index:2147483001;background:rgba(15,23,42,.45);display:flex;align-items:flex-end;justify-content:center}'
     + '@media (min-width:640px){.sgn-fond{align-items:center}}'
-    + '.sgn-boite{--f:#fff;--t:#0f172a;--d:#475569;--b:#e2e8f0;--a:#2563eb;--c:#f8fafc;--ko:#dc2626;--ok:#16a34a;background:var(--f);color:var(--t);width:100%;max-width:520px;max-height:92vh;overflow:auto;'
+    + '.sgn-boite{--f:#fff;--t:#0f172a;--d:#475569;--b:#e2e8f0;--a:var(--sgn-a,#2563eb);--p:var(--sgn-p,#2563eb);--sp:var(--sgn-sp,#fff);--c:#f8fafc;--ko:#dc2626;--ok:#16a34a;background:var(--f);color:var(--t);width:100%;max-width:520px;max-height:92vh;overflow:auto;'
     + 'border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));font:15px/1.45 ' + POLICE + ';box-sizing:border-box}'
     + '@media (min-width:640px){.sgn-boite{border-radius:16px}}'
-    + '@media (prefers-color-scheme:dark){.sgn-boite{--f:#0f172a;--t:#f1f5f9;--d:#94a3b8;--b:#334155;--a:#60a5fa;--c:#1e293b;--ko:#f87171;--ok:#4ade80}}'
+    // Fenêtre sombre : la page a un fond sombre (teindre, plus bas) ; --a, --p et --sp viennent de la page.
+    + '.sgn-sombre .sgn-boite{--f:#0f172a;--t:#f1f5f9;--d:#94a3b8;--b:#334155;--c:#1e293b;--ko:#f87171;--ok:#4ade80}'
     + '.sgn-boite *{box-sizing:border-box}'
     // L'en-tête : la croix reste en haut à droite ; « Mes demandes » passe à la ligne s'il n'a pas la place à côté du titre.
     + '.sgn-tete{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;margin-bottom:10px;padding-right:36px}'
@@ -430,9 +443,9 @@
     + '.sgn-bouton[aria-pressed="true"]{background:#fee2e2;color:#991b1b;border-color:#fca5a5}'
     + '.sgn-texte{width:100%;min-height:96px;padding:10px;border:1px solid var(--b);border-radius:10px;background:transparent;color:var(--t);font-family:inherit;font-size:16px;line-height:1.4;resize:vertical}'
     + '.sgn-cle{width:100%;padding:10px;border:1px solid var(--b);border-radius:10px;background:transparent;color:var(--t);font-family:inherit;font-size:16px;margin-top:6px}'
+    + '.sgn-texte:focus-visible,.sgn-cle:focus-visible{outline:2px solid var(--a);outline-offset:0}'
     + '.sgn-aide{color:var(--d);font-size:13px;margin:6px 0 0}'
-    + '.sgn-envoyer{width:100%;margin-top:12px;padding:12px;border:0;border-radius:12px;background:var(--a);color:#fff;font-family:inherit;font-size:16px;font-weight:600;cursor:pointer}'
-    + '@media (prefers-color-scheme:dark){.sgn-envoyer{color:#0f172a}}'
+    + '.sgn-envoyer{width:100%;margin-top:12px;padding:12px;border:0;border-radius:12px;background:var(--p);color:var(--sp);font-family:inherit;font-size:16px;font-weight:600;cursor:pointer}'
     + '.sgn-envoyer:disabled{opacity:.55;cursor:default}'
     + '.sgn-etat{min-height:20px;margin-top:8px;font-size:14px}.sgn-etat.ko{color:var(--ko)}.sgn-etat.ok{color:var(--ok)}'
     + '.sgn-pied{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px}.sgn-pied .sgn-lien{padding:6px 0;font-size:14px;white-space:normal;text-align:left}'
@@ -440,13 +453,13 @@
     + '.sgn-filtres{display:flex;gap:6px;margin-bottom:4px}'
     + '.sgn-filtre{flex:1 1 0;min-width:0;padding:8px 4px;border:1px solid var(--b);border-radius:999px;background:transparent;color:var(--t);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}'
     + '.sgn-filtre b{color:var(--d);margin-left:3px}'
-    + '.sgn-filtre[aria-pressed="true"]{background:#d97757;border-color:#d97757;color:#fff}.sgn-filtre[aria-pressed="true"] b{color:#fff}'
+    + '.sgn-filtre[aria-pressed="true"]{background:var(--p);border-color:var(--p);color:var(--sp)}.sgn-filtre[aria-pressed="true"] b{color:var(--sp)}'
     // La puce du projet choisi (Signaler.demandes({ projet })), seule sur sa ligne au-dessus des filtres ; « × » la retire.
     + '.sgn-projet{display:flex;margin-bottom:8px;min-width:0}'
-    + '.sgn-puce{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-height:36px;padding:6px 10px 6px 14px;border:1px solid #d97757;border-radius:999px;'
+    + '.sgn-puce{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-height:36px;padding:6px 10px 6px 14px;border:1px solid var(--a);border-radius:999px;'
     + 'background:transparent;color:var(--t);font:inherit;font-size:14px;font-weight:600;text-align:left;overflow-wrap:anywhere;cursor:pointer}'
     + '.sgn-puce-x{flex:0 0 auto;font-size:18px;line-height:1;color:var(--d)}'
-    + '.sgn-puce:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}'
+    + '.sgn-puce:focus-visible{outline:3px solid var(--a);outline-offset:2px}'
     + '.sgn-etat-d{min-height:0;margin:6px 0}'
     + '.sgn-erreur{margin:8px 0;color:var(--ko);font-size:14px}'
     + '.sgn-vide{margin:12px 0;color:var(--d)}'
@@ -471,8 +484,7 @@
     + '.sgn-offre .sgn-rang{margin:0}.sgn-offre .sgn-bouton{flex:1 1 140px}'
     + '.sgn-qui{color:var(--d);font-size:14px;padding:6px 0}'
     // Le bouton principal d'une carte (« Mettre en ligne »), et « Annuler », qu'on garde appuyé : il se remplit en 1,2 s.
-    + '.sgn-prim{background:var(--a);border-color:var(--a);color:#fff;font-weight:600}'
-    + '@media (prefers-color-scheme:dark){.sgn-prim{color:#0f172a}}'
+    + '.sgn-prim{background:var(--p);border-color:var(--p);color:var(--sp);font-weight:600}'
     + '.sgn-tenir{position:relative;isolation:isolate;overflow:hidden;color:var(--ko);-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:manipulation}'
     + '.sgn-tenir::before{content:"";position:absolute;inset:0;z-index:-1;background:currentColor;opacity:.2;transform:scaleX(0);transform-origin:0 50%;pointer-events:none}'
     + '.sgn-tenir.sgn-tient::before{transform:scaleX(1);transition:transform 1.2s linear}'
@@ -484,7 +496,7 @@
     + '.sgn-ap.sgn-ap-ko{cursor:pointer}.sgn-ap-ko img{visibility:hidden}.sgn-ap-ko::after{content:"Image bloquée par cette page : touche pour l’ouvrir";position:absolute;inset:0 0 26px;display:flex;align-items:center;justify-content:center;padding:6px 8px;font-size:12px;line-height:1.3;text-align:center;color:var(--d)}'
     + '.sgn-vis-ko{margin:0;padding:18px 12px;text-align:center;color:#fff;font-size:15px;line-height:1.45}.sgn-vis-ko a{color:#fff;font-weight:700}'
     + '.sgn-ap span{position:absolute;left:6px;bottom:6px;padding:0 8px;border-radius:999px;background:rgba(15,23,42,.8);color:#fff;font-size:12px;font-weight:700;line-height:20px}'
-    + '.sgn-ap:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}'
+    + '.sgn-ap:focus-visible{outline:3px solid var(--a);outline-offset:2px}'
     + '.sgn-vis{position:fixed;inset:0;z-index:2147483002;display:flex;flex-direction:column;box-sizing:border-box;background:rgba(2,6,23,.94);color:#f1f5f9;'
     + 'padding:calc(10px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));font:15px/1.4 ' + POLICE + '}'
     + '.sgn-vis *{box-sizing:border-box}'
@@ -498,6 +510,150 @@
     + '.e-envoyee{--e:#2563eb}.e-pas_partie{--e:#dc2626}.e-a_relire{--e:#b45309}.e-question{--e:#7c3aed}.e-rien{--e:#64748b}.e-echec{--e:#991b1b}.e-en_ligne,.e-reglee{--e:#15803d}'
     + '.e-a_valider{--e:#c2410c}.e-annulee{--e:#475569}.e-en_cours_annulation,.e-en_cours_validation{--e:#4f46e5}';
   var style = document.createElement('style'); style.textContent = css; (document.head || document.documentElement).appendChild(style);
+
+  // ── LA COULEUR DE LA PAGE (voir l'en-tête : « juste pour la couleur, il prend celle de la page ») ──────────────────────────────
+  // teinte() rend { sombre, a, p, sp } : la fenêtre sombre ou claire, la couleur des liens et des bordures (a, lisible sur la
+  // fenêtre), celle des boutons pleins (p, la couleur de la page telle quelle) et le texte posé dessus (sp). Gardée 2 s : la
+  // fenêtre se redessine souvent. teindre(el) la pose sur la fenêtre (.sgn-fond) et sur la bulle (--sgn-a, --sgn-p, --sgn-sp).
+  var VARIABLES_COULEUR = ['--signaler-couleur', '--accent', '--color-accent', '--accent-color', '--primary', '--color-primary',
+    '--primary-color', '--brand', '--brand-color', '--couleur', '--couleur-accent', '--theme-color', '--main-color'];
+  var BLEU = { clair: [37, 99, 235], sombre: [96, 165, 250] }, FENETRE = { clair: [255, 255, 255], sombre: [15, 23, 42] };
+  var BLANC = [255, 255, 255], ENCRE = [15, 23, 42];
+  var sondeCouleur = null, toileCouleur = null, teinteGardee = null;
+  // Une couleur calculée par le navigateur (« rgb(…) », « oklch(…) »…) → [r, g, b, a] ; null si illisible.
+  function enRvb(c) {
+    var m = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/.exec(String(c || '').trim());
+    if (m) return [+m[1], +m[2], +m[3], m[4] == null ? 1 : +m[4] / (m[5] ? 100 : 1)];
+    if (!c || /^(transparent|none)$/i.test(String(c).trim())) return null;
+    try {   // les autres écritures : le canevas les peint, on relit le point (ramené en sRGB)
+      toileCouleur = toileCouleur || document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+      toileCouleur.clearRect(0, 0, 1, 1); toileCouleur.fillStyle = '#000'; toileCouleur.fillStyle = String(c); toileCouleur.fillRect(0, 0, 1, 1);
+      var d = toileCouleur.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255];
+    } catch (e) { return null; }
+  }
+  // Une valeur CSS (« #1d64d8 », « light-dark(…) », « hsl(…) »…) telle que la page la peindrait ; null si ce n'est pas une couleur.
+  function couleurCalculee(v) {
+    v = String(v == null ? '' : v).trim();
+    if (!v || !document.body) return null;
+    try {
+      var el = sondeCouleur || (sondeCouleur = marquer(document.createElement('i')));
+      el.style.cssText = 'position:fixed;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none';
+      el.style.color = v;
+      if (!el.style.color) return null;
+      document.body.appendChild(el);
+      var c = enRvb(getComputedStyle(el).color);
+      el.remove();
+      return c;
+    } catch (e) { return null; }
+  }
+  function luminance(c) {
+    var f = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+  }
+  function contraste(a, b) { var x = luminance(a), y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+  function melange(a, b, t) { return [0, 1, 2].map(function (i) { return Math.round(a[i] + (b[i] - a[i]) * t); }); }
+  function saturation(c) {
+    var x = Math.max(c[0], c[1], c[2]) / 255, n = Math.min(c[0], c[1], c[2]) / 255, l = (x + n) / 2;
+    return x === n ? 0 : (x - n) / (1 - Math.abs(2 * l - 1));
+  }
+  function enHex(c) { return '#' + c.slice(0, 3).map(function (v) { return ('0' + Math.round(v).toString(16)).slice(-2); }).join(''); }
+  // Le fond de la page : body, sinon html (leur couleur, sinon la première couleur de leur dégradé) ; null : celui du navigateur.
+  function fondDeLaPage() {
+    var els = [document.body, document.documentElement];
+    for (var i = 0; i < els.length; i++) {
+      if (!els[i]) continue;
+      var s = getComputedStyle(els[i]), c = enRvb(s.backgroundColor);
+      if (c && c[3] >= 0.5) return c;
+      var g = /rgba?\([^)]*\)/.exec(s.backgroundImage || '');
+      if (g && (c = enRvb(g[0])) && c[3] >= 0.5) return c;
+    }
+    return null;
+  }
+  function visibleALEcran(el) {
+    if (!el || estAMoi(el)) return false;
+    var r = el.getBoundingClientRect();
+    return r.width >= 24 && r.height >= 16 && r.bottom > 0 && r.right > 0 && r.top < (window.innerHeight || 0) + 400;
+  }
+  // La couleur de la page (sans les ajustements) : [r, g, b] ou null.
+  function couleurDeLaPage(fond) {
+    var pleine = function (c) { return !!c && c[3] >= 0.6; };
+    var r = typeof C.couleur === 'function' ? C.couleur() : C.couleur, c, i, k;
+    if (r && String(r).toLowerCase() !== 'auto' && pleine(c = couleurCalculee(r))) return c;
+    // 1. une variable CSS de la page (celles de html se lisent sur body : un thème posé sur body l'emporte)
+    var s = getComputedStyle(document.body);
+    for (k = 0; k < VARIABLES_COULEUR.length; k++) {
+      c = couleurCalculee(s.getPropertyValue(VARIABLES_COULEUR[k]));
+      if (pleine(c) && contraste(c, fond) >= 1.2) return c;   // pas la couleur du fond lui-même (un jaune sur blanc : 1,46)
+    }
+    // 2. le fond plein d'un bouton : un « principal » d'abord, puis un bouton d'envoi, puis n'importe quel bouton
+    var groupes = ['[class*="primary"],[class*="primaire"],[class*="principal"],[class*="cta"]', 'button[type="submit"],input[type="submit"]',
+      'button,[role="button"],.btn,.button,a[class*="btn"],a[class*="bouton"]'];
+    for (k = 0; k < groupes.length; k++) {
+      var l = document.querySelectorAll(groupes[k]);
+      for (i = 0; i < l.length && i < 120; i++) {
+        if (!visibleALEcran(l[i])) continue;
+        c = enRvb(getComputedStyle(l[i]).backgroundColor);
+        if (pleine(c) && contraste(c, fond) >= (k ? 2 : 1.3) && (saturation(c) >= 0.25 || luminance(c) < 0.05 || luminance(c) > 0.8)) return c;
+      }
+    }
+    // 3. la couleur la plus fréquente de ses liens, si ce n'est ni celle du texte ni le bleu par défaut du navigateur
+    var texte = enRvb(s.color) || [0, 0, 0], compte = {}, vues = {}, meilleure = '', liens = document.querySelectorAll('a[href]');
+    for (i = 0; i < liens.length && i < 150; i++) {
+      if (!visibleALEcran(liens[i])) continue;
+      c = enRvb(getComputedStyle(liens[i]).color);
+      if (!pleine(c) || contraste(c, fond) < 2.5 || contraste(c, texte) < 1.3) continue;
+      var cle = enHex(c);
+      if (cle === '#0000ee' || cle === '#551a8b') continue;
+      compte[cle] = (compte[cle] || 0) + 1; vues[cle] = c;
+      if (!meilleure || compte[cle] > compte[meilleure]) meilleure = cle;
+    }
+    if (meilleure && compte[meilleure] >= 2) return vues[meilleure];
+    // 4. sa theme-color (celle du mode affiché), si c'est une vraie couleur et pas celle du fond
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (i = 0; i < metas.length; i++) {
+      var media = metas[i].getAttribute('media');
+      if (media && window.matchMedia && !window.matchMedia(media).matches) continue;
+      c = couleurCalculee(metas[i].getAttribute('content'));
+      if (pleine(c) && saturation(c) >= 0.25 && contraste(c, fond) >= 1.2) return c;
+    }
+    return null;
+  }
+  function teinte() {
+    if (teinteGardee && Date.now() - teinteGardee.t < 2000) return teinteGardee;
+    var t = { t: Date.now(), sombre: false, a: enHex(BLEU.clair), p: enHex(BLEU.clair), sp: '#ffffff' };
+    try {
+      var fp = fondDeLaPage(), choix = String(C.theme || 'auto').toLowerCase();
+      if (choix === 'sombre' || choix === 'dark') t.sombre = true;
+      else if (choix === 'clair' || choix === 'light') t.sombre = false;
+      else if (fp) t.sombre = luminance(fp) < 0.179;
+      else {   // pas de fond : celui du navigateur, sombre seulement si la page l'accepte (color-scheme) et l'appareil le demande
+        var cs = getComputedStyle(document.documentElement).colorScheme || '';
+        t.sombre = /dark/.test(cs) && (!/light/.test(cs) || !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
+      }
+      var f = FENETRE[t.sombre ? 'sombre' : 'clair'], c = (couleurDeLaPage(fp || f) || BLEU[t.sombre ? 'sombre' : 'clair']).slice(0, 3);
+      // Lisible sur la fenêtre (liens, bordures) : rapprochée du noir (fenêtre claire) ou du blanc (fenêtre sombre), pas plus qu'il ne faut.
+      var a = c, vers = t.sombre ? BLANC : [0, 0, 0];
+      for (var n = 1; n <= 20 && contraste(a, f) < 4.5; n++) a = melange(c, vers, n / 20);
+      // Un bouton plein garde la couleur de la page, sauf si elle se confond avec la fenêtre (alors celle des liens).
+      var p = contraste(c, f) >= 1.4 ? c : a;
+      t.a = enHex(a); t.p = enHex(p); t.sp = contraste(BLANC, p) >= contraste(ENCRE, p) ? '#ffffff' : enHex(ENCRE);
+    } catch (e) {}
+    teinteGardee = t;
+    return t;
+  }
+  function teindre(el) {
+    if (!el) return;
+    var t = teinte();
+    el.classList.toggle('sgn-sombre', t.sombre);
+    el.style.setProperty('--sgn-a', t.a); el.style.setProperty('--sgn-p', t.p); el.style.setProperty('--sgn-sp', t.sp);
+  }
+  // La page change de thème (l'appareil passe en sombre) : la fenêtre et la bulle ouvertes suivent.
+  try {
+    if (window.matchMedia) {
+      var schema = window.matchMedia('(prefers-color-scheme: dark)'), suivreTheme = function () { teinteGardee = null; setTimeout(function () { teindre(fond); teindre(bulle); }, 60); };
+      if (schema.addEventListener) schema.addEventListener('change', suivreTheme); else if (schema.addListener) schema.addListener(suivreTheme);
+    }
+  } catch (e) {}
 
   // ── L'ÉTAT D'UN SIGNALEMENT EN COURS (le brouillon) ────────────────────────────────────────────────────────────────────────
   // captures : [{ donnees (la photo, sans dessin), ou, traits: [{ l, p: [[x, y]…], e? }], grille, vw, vh, at }]
@@ -1294,6 +1450,7 @@
       document.body.appendChild(bulle);
     }
     bulle.setAttribute('data-genre', genre);
+    teindre(bulle);
     bulle.innerHTML = '<p>' + h(texte) + '</p>' + (genre === 'alerte'
       ? '<div class="sgn-bulle-r"><button type="button" class="sgn-bulle-ok" data-a="b-signaler">Signaler</button><button type="button" data-a="b-ignorer">Ignorer</button></div>' : '');
     bulle.style.display = '';
@@ -1408,7 +1565,7 @@
   // ── MES DEMANDES : ce que le relais a gardé des demandes de CETTE clé, avec leur état ──────────────────────────────────────
   // Les états et leurs libellés : les mêmes que le relais (LIBELLES_ETATS de relay/coeur.mjs).
   var ETATS = { envoyee: 'en cours', pas_partie: 'pas partie', a_relire: 'à relire', question: 'question', rien: 'rien à faire', echec: 'échec', en_ligne: 'en ligne',
-    a_valider: 'à valider', annulee: 'annulée', en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours' };
+    a_valider: 'à valider', annulee: 'annulée', en_cours_annulation: 'annulation en cours', en_cours_validation: 'mise en ligne en cours', reglee: 'réglée' };
   var A_TRAITER = { question: 1, a_relire: 1, a_valider: 1, pas_partie: 1 };   // ce qui attend le propriétaire
   var EN_COURS = { envoyee: 1, en_cours_annulation: 1, en_cours_validation: 1 };   // une session Claude y travaille
   var FILTRES = [
@@ -1634,6 +1791,12 @@
       },
       conflit: function (j) { return /abonnement/.test(String(j.erreur || '')) ? phrase(j.erreur) : 'Cette demande est déjà repartie : rien à renvoyer.'; } }).then(apresAction);
   }
+  // « Marquer comme réglée » : la personne classe elle-même une demande qui l'attend ; elle ne compte plus « à traiter ».
+  function regler(id, el) {
+    if (!aAcces() || !id) return;
+    agir('regler', id, el, {}, { enCours: 'Classement…', echec: 'Pas classée : ',
+      ok: function () { return ['Demande marquée comme réglée.', 'ok']; } }).then(apresAction);
+  }
   // « Annuler » une modification en ligne (après l'appui de 1,2 s) : le relais lance le travail ANNULER (git revert, en ligne).
   function annulerMiseEnLigne(id, el) {
     if (!aAcces() || !id) return;
@@ -1766,7 +1929,7 @@
     var p = nomProjetDe(x), q = quand(x.creeLeMs), ab = x.abonnement === '1' || x.abonnement === '2' ? 'via abonnement ' + x.abonnement : '';
     var texte = String(x.texte || '').trim();
     if (!texte) texte = Number(x.captures) > 0 ? '(capture seule, sans texte)' : x.audio ? '(note vocale seule)' : '(sans texte)';
-    var acts = actionsDe(x), faire = [], liensH = [], notes = [];
+    var acts = actionsDe(x), faire = [], liensH = [], notes = [], reglage = [];
     var liens = (Array.isArray(x.liens) ? x.liens : []).map(httpsSur).filter(Boolean), pr = liens.filter(estPr)[0] || '', lien = liens[0] || '';
     var session = httpsSur(x.sessionUrl), apercu = httpsSur(x.apercu);
     var a = function (href, t) { return '<a class="sgn-act" href="' + h(href) + '" target="_blank" rel="noopener noreferrer">' + t + '</a>'; };
@@ -1781,6 +1944,7 @@
       if (autre) faire.push('<button type="button" class="sgn-act" data-a="renvoyer" data-id="' + id + '" data-ab="' + autre + '" aria-label="Renvoyer sur l’abonnement ' + autre + '">Renvoyer sur l’autre abonnement</button>');
       if (EN_COURS[x.etat]) notes.push('Pas de nouvelle de Claude depuis plus de 15 minutes.');
     }
+    if (acts.indexOf('regler') >= 0) reglage.push('<button type="button" class="sgn-act" data-a="regler" data-id="' + id + '">Marquer comme réglée</button>');
     if (session) liensH.push(a(session, 'Ouvrir dans Claude'));
     if (apercu) liensH.push(a(apercu, 'Voir l’aperçu'));
     if (lien && !(x.etat === 'a_valider' && lien === pr)) liensH.push(a(lien, estPr(lien) ? 'Voir la PR' : 'Voir le lien'));
@@ -1799,6 +1963,7 @@
       + (vign.length ? '<div class="sgn-avap">' + vign.join('') + '</div>' : '')
       + (faire.length ? '<div class="sgn-actions">' + faire.slice(0, 3).join('') + '</div>' : '')
       + (liensH.length ? '<div class="sgn-actions">' + liensH.slice(0, 3).join('') + '</div>' : '')
+      + (reglage.length ? '<div class="sgn-actions">' + reglage.join('') + '</div>' : '')
       + '</li>';
   }
   function bas(actualiser) {
@@ -1923,6 +2088,7 @@
   function rendre(message, ton, lien) {
     if (!document.body) return;
     if (!fond) creerFond();
+    teindre(fond);
     rendus++;
     var avant = document.activeElement && fond.contains(document.activeElement) ? document.activeElement : null;
     var cleFocus = avant ? [avant.getAttribute('data-a'), avant.getAttribute('data-v'), avant.getAttribute('data-id')] : null;
@@ -1980,6 +2146,7 @@
     else if (a === 'sansprojet') { D.projet = null; if (D.auto) D.filtre = filtreAuto(); rendre(); }
     else if (a === 'actualiser') { rendre('Actualisation…'); chargerDemandes().then(function () { if (fond && vue === 'demandes') rendre(D.erreur ? '' : 'Liste à jour (' + heure() + ').', 'ok'); }); }
     else if (a === 'renvoyer') renvoyer(el.getAttribute('data-id'), el, el.getAttribute('data-ab'));
+    else if (a === 'regler') regler(el.getAttribute('data-id'), el);
     else if (a === 'valider') mettreEnLigne(el.getAttribute('data-id'), el);
     else if (a === 'annuler') { /* rien au simple toucher : brancherTenir (garder appuyé 1,2 s) */ }
     else if (a === 'agrandir') {
@@ -2168,6 +2335,7 @@
 
   window.Signaler = {
     ouvrir: function () { monter(); ouvrir(); },
+    teinte: function () { teinteGardee = null; var t = teinte(); return { sombre: t.sombre, couleur: t.a, plein: t.p, texte: t.sp }; },
     cacher: function () { cacheParPage = true; if (fab) fab.style.display = 'none'; cacherBulle(); majCompteur(); },
     montrer: function () {
       cacheParPage = false;

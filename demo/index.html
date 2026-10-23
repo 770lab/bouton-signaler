@@ -60,7 +60,7 @@
     // ?projet=home (ou pupitre, havroutia, avinou, gescom) : le projet de la page, sinon d'après son adresse (ici, aucun).
     // L'empreinte (WebAuthn) ne marche qu'en https ou sur http://localhost : ouvrir la démo par localhost, pas par 127.0.0.1.
     var q = new URLSearchParams(location.search);
-    window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
+    window.SignalerConfig = { endpoint: q.get('relais') || 'http://localhost:8787', projet: q.get('projet') || undefined, couleur: q.get('couleur') || undefined, theme: q.get('theme') || undefined, version: 'demo-1.0', utilisateur: function () { return 'marie@exemple.fr'; } };
   </script>
   <script src="../widget/signaler.js" defer></script>
 </body>
