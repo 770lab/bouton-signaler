@@ -42,7 +42,7 @@ part, dans la même session. Un bouton qui ne peut pas suivre : le dire à Yoann
 |---|---|---|
 | 770lab.com/home, le pupitre (/home/robots.html), l'Atelier 770LAB (/atelier), la veille (/veille) | `770lab/home` : `signaler.js` | copie à l'identique ; changer son `?v=` dans `home/index.html`, `home/robots.html`, `770lab.github.io/atelier/index.html` et `veille/index.html` (Cloudflare garde les .js 4 h) |
 | 770lab.com/havroutia | `770lab/770lab.github.io` : `havroutia/signaler.js` | copie à l'identique ; `data-couleur` = le bleu marine de HavroutIA (#2f4f6f), que la page ne donne pas en CSS |
-| avinou-malkenou.web.app | `770lab/avinou-malkenou` : `app/js/signaler/signaler.js` | copie à l'identique, son empreinte sha256 est fixée par `npm run test:ui` ; branche `am/…`, jamais `main` ; la feuille aux couleurs de sa charte (`app/css/am.css`) |
+| avinou-malkenou.web.app | `770lab/avinou-malkenou` : `app/js/signaler/signaler.js` | copie à l'identique, son empreinte sha256 est fixée par `npm run test:ui` ; branche `am/…`, jamais `main`, mise en ligne par le propriétaire ; `data-couleur="#ffffff"` (le blanc de son bouton principal : sa charte n'a pas de couleur vive pour un envoi) ; `app/css/am.css` ne touche plus la fenêtre |
 | CRM gescom, Atelier de gestion | `770lab/gescom` : `docs/retour.js`, `docs/atelier.html` | bouton à part (Firestore, routine du CRM), même fenêtre |
 | crm-lav (simulateur, devis) | `770lab/crm-lav` : `signaler.js` | bouton à part (porte `signalerLav` de gescom), même fenêtre |
 | KOULAM (compte du propriétaire) | `770lab/koulam` : `js/claude-retouche.js` | bouton à part (« Modifier avec Claude », Cloud Function `claudeRetouche`), même fenêtre |
