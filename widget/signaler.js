@@ -527,7 +527,9 @@
     if (!c || /^(transparent|none)$/i.test(String(c).trim())) return null;
     try {   // les autres écritures : le canevas les peint, on relit le point (ramené en sRGB)
       toileCouleur = toileCouleur || document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-      toileCouleur.clearRect(0, 0, 1, 1); toileCouleur.fillStyle = '#000'; toileCouleur.fillStyle = String(c); toileCouleur.fillRect(0, 0, 1, 1);
+      toileCouleur.clearRect(0, 0, 1, 1); toileCouleur.fillStyle = '#010203'; toileCouleur.fillStyle = String(c);
+      if (toileCouleur.fillStyle === '#010203') return null;   // le canevas ne la connaît pas : pas du noir pour autant
+      toileCouleur.fillRect(0, 0, 1, 1);
       var d = toileCouleur.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255];
     } catch (e) { return null; }
   }
@@ -536,7 +538,7 @@
     v = String(v == null ? '' : v).trim();
     if (!v || !document.body) return null;
     try {
-      var el = sondeCouleur || (sondeCouleur = marquer(document.createElement('i')));
+      var el = sondeCouleur || (sondeCouleur = marquer(document.createElement('span')));
       el.style.cssText = 'position:fixed;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none';
       el.style.color = v;
       if (!el.style.color) return null;
