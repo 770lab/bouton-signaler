@@ -40,8 +40,9 @@ part, dans la même session. Un bouton qui ne peut pas suivre : le dire à Yoann
 
 | Où | Fichier | À savoir |
 |---|---|---|
-| 770lab.com/home, le pupitre (/home/robots.html), l'Atelier 770LAB (/atelier), la veille (/veille) | `770lab/home` : `signaler.js` | copie à l'identique ; changer son `?v=` dans `home/index.html`, `home/robots.html`, `770lab.github.io/atelier/index.html` et `veille/index.html` (Cloudflare garde les .js 4 h) |
+| 770lab.com/home, le pupitre (/home/robots.html), l'Atelier 770LAB (/atelier), la veille (/veille) | `770lab/home` : `signaler.js` | copie à l'identique ; changer son `?v=` dans `home/index.html`, `home/robots.html`, `home/signaler-auto.js` (`BOUTON`), `770lab.github.io/atelier/index.html` et `veille/index.html` (Cloudflare garde les .js 4 h) |
 | 770lab.com/havroutia | `770lab/770lab.github.io` : `havroutia/signaler.js` | copie à l'identique ; `data-couleur` = le bleu marine de HavroutIA (#2f4f6f), que la page ne donne pas en CSS |
+| 770lab.com, toutes les autres pages | `770lab/home` : `outils/signaler-injecteur/` (injecteur Cloudflare) + `signaler-auto.js` (le chargeur, servi à /home/signaler-auto.js) | pas de copie : l'injecteur ajoute le chargeur à chaque page HTML sans bouton, et le chargeur charge `/home/signaler.js` pour l'ÉQUIPE seulement (session, clé d'équipe ou `?claude=1`) avec `data-projet` = le premier segment de l'adresse (770lab.com/mpr/ → « mpr », « à valider » par défaut) ; même `?v=` que `home/index.html` (décision de Yoann du 26/10/2026) |
 | avinou-malkenou.web.app | `770lab/avinou-malkenou` : `app/js/signaler/signaler.js` | copie à l'identique, son empreinte sha256 est fixée par `npm run test:ui` ; branche `am/…`, jamais `main`, mise en ligne par le propriétaire ; `data-couleur="#ffffff"` (le blanc de son bouton principal : sa charte n'a pas de couleur vive pour un envoi) ; `app/css/am.css` ne touche plus la fenêtre |
 | CRM gescom, Atelier de gestion | `770lab/gescom` : `docs/retour.js`, `docs/atelier.html` | bouton à part (Firestore, routine du CRM), même fenêtre |
 | crm-lav (simulateur, devis) | `770lab/crm-lav` : `signaler.js` | bouton à part (porte `signalerLav` de gescom), même fenêtre |
@@ -50,6 +51,8 @@ part, dans la même session. Un bouton qui ne peut pas suivre : le dire à Yoann
 ## Ce que le bouton fait toujours
 
 - Il est sur CHAQUE page de chaque projet (« à chaque projet, chaque page que je crée, je veux le bouton Signaler », 20/10/2026).
+  Sur 770lab.com, c'est l'injecteur Cloudflare (`770lab/home`, `outils/signaler-injecteur/`) qui le garantit : toute page HTML
+  sans bouton reçoit le chargeur `/home/signaler-auto.js`, qui le montre à l'équipe seulement (26/10/2026).
 - LA CONNEXION PAR L'EMPREINTE, PAS LA VALIDATION (22/10/2026 : « je ne veux plus avoir à valider par empreinte l'envoi d'une
   modification. Je veux seulement me connecter avec une empreinte ») : « Mettre en ligne » part avec la connexion qu'on a (clé
   d'équipe ou session), côté page ET côté relais.
