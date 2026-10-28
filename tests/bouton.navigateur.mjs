@@ -458,13 +458,13 @@ try {
   await (await dct.p.waitForSelector('.sgn-fab')).click();
   await dct.p.waitForSelector('.sgn-texte');
   await dct.p.click('[data-a="micro"]');
-  const finie = await dct.p.waitForFunction(() => window.__srLancements >= 5 && (document.querySelector('[data-a="micro"]').textContent || '').trim() === 'Dicter', null, { timeout: 10000 }).then(() => true, () => false);
+  const finie = await dct.p.waitForFunction(() => window.__srLancements >= 5 && document.querySelector('[data-a="micro"]').getAttribute('aria-label') === 'Dicter', null, { timeout: 10000 }).then(() => true, () => false);
   const dit = await dct.p.$eval('.sgn-texte', (z) => z.value.trim());
   ok(finie && dit === 'dans chaque conversation mets-moi un lien', 'deux phrases, chaque mot une seule fois (et pas « dansdans chaquedans… ») — « ' + dit + ' »');
   ok(await dct.p.evaluate(() => window.__srLancements) === 5 && /je n’entends plus rien/.test(await texte(dct.p, '.sgn-etat')),
     'relancée après chaque phrase, arrêtée après trois silences, et ça se dit');
   await dct.p.click('[data-a="micro"]'); await dct.p.click('[data-a="micro"]'); await dct.p.waitForTimeout(600);
-  ok(await dct.p.evaluate(() => window.__srLancements) === 6 && (await texte(dct.p, '[data-a="micro"]')) === 'Dicter', 'rappuyer arrête : plus aucune relance');
+  ok(await dct.p.evaluate(() => window.__srLancements) === 6 && (await dct.p.getAttribute('[data-a="micro"]', 'aria-label')) === 'Dicter', 'rappuyer arrête : plus aucune relance');
   ok(!dct.erreursPage.length, 'aucune erreur dans la page' + (dct.erreursPage.length ? ' — ' + dct.erreursPage.join(' ; ') : ''));
   await dct.ctx.close();
 
