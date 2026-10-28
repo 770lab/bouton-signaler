@@ -14,7 +14,10 @@ reprend (INSTALL.md, étape 1) ; ses propres règles (CLAUDE.md, AGENTS.md) ne p
      doigt ou à la souris. » et « Effacer le dessin » ;
   4. les vignettes numérotées (× rouge pour en retirer une) et « + Un autre écran » : la fenêtre se ferme, le brouillon attend, le
      toucher suivant du rond photographie l'écran du moment (5 écrans au plus) — sur TOUS les boutons ;
-  5. « Capturer l'écran · Importer · Dicter » (une note vocale quand le navigateur ne sait pas dicter) ;
+  5. TROIS RONDS À PICTOGRAMMES, pas de texte (Yoann, 28/10/2026 : « je veux des logos, pas de texte » ; « tous les boutons Signaler aient
+     le même design, pour les boutons d'actions ») : appareil photo = capturer l'écran, trombone = importer, micro = dicter (onde = note
+     vocale quand le navigateur ne sait pas dicter ; carré pendant l'enregistrement, rouge). Ronds de 46 px, le micro dans la couleur
+     de la page, le nom seulement en `aria-label` / `title`. Jamais de pastilles de texte pour ces gestes, nulle part ;
   6. le texte « Qu'est-ce qui ne va pas ? Qu'attendais-tu ? » ;
   7. « Envoyer à Claude », plein, sur toute la largeur ;
   8. en bas, qui est connecté (« Connexion par empreinte (…) · Se déconnecter »).

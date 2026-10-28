@@ -441,6 +441,9 @@
     + '.sgn-bouton{padding:9px 12px;border-radius:10px;border:1px solid var(--b);background:transparent;color:var(--t);font:inherit;cursor:pointer}'
     + '.sgn-bouton:disabled{opacity:.55;cursor:default}'
     + '.sgn-bouton[aria-pressed="true"]{background:#fee2e2;color:#991b1b;border-color:#fca5a5}'
+    + '.sgn-ic{flex:none;box-sizing:border-box;width:46px;height:46px;padding:0;border-radius:50%;display:inline-grid;place-items:center;background:var(--c);box-shadow:0 1px 2px rgba(15,23,42,.18)}'
+    + '.sgn-ic svg{width:21px;height:21px}.sgn-ic:active{transform:scale(.93)}'
+    + '.sgn-mic{background:var(--p);border-color:transparent;color:var(--sp)}.sgn-mic[aria-pressed="true"]{background:#ef4444;color:#fff;border-color:transparent}'
     + '.sgn-texte{width:100%;min-height:96px;padding:10px;border:1px solid var(--b);border-radius:10px;background:transparent;color:var(--t);font-family:inherit;font-size:16px;line-height:1.4;resize:vertical}'
     + '.sgn-cle{width:100%;padding:10px;border:1px solid var(--b);border-radius:10px;background:transparent;color:var(--t);font-family:inherit;font-size:16px;margin-top:6px}'
     + '.sgn-texte:focus-visible,.sgn-cle:focus-visible{outline:2px solid var(--a);outline-offset:0}'
@@ -944,6 +947,17 @@
       });
     }).catch(function () {});
   }
+  // Les trois gestes sont des RONDS À PICTOGRAMMES (Yoann, 28/10/2026 : « des logos, pas de texte ») : photo, trombone, micro (onde
+  // quand le navigateur ne sait pas dicter, une note vocale) ; le nom reste dans aria-label / title.
+  var ICONES = {
+    photo: '<path d="M14.5 4h-5L8 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
+    trombone: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+    micro: '<rect width="8" height="13" x="8" y="2" rx="4"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/><path d="M9 22h6"/>',
+    onde: '<path d="M3 10v4"/><path d="M7 6v12"/><path d="M11 3v18"/><path d="M15 8v8"/><path d="M19 5v14"/><path d="M22 10v4"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>'
+  };
+  function icone(nom) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + ICONES[nom] + '</svg>'; }
+  function iconeMicro(bouton, nom, libelle) { bouton.innerHTML = icone(nom); bouton.setAttribute('aria-label', libelle); bouton.title = libelle; }
   var EMPREINTE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'
     + '<path d="M5.6 18.6A9.6 9.6 0 0 1 3.4 12 8.6 8.6 0 0 1 19 7"/><path d="M20.4 10.4c.1.5.1 1 .1 1.6 0 2.4-.4 4.6-1.2 6.6"/>'
     + '<path d="M7.9 16.4A10.6 10.6 0 0 1 7.5 12a4.5 4.5 0 0 1 9 0c0 3-.6 5.8-1.8 8.2"/><path d="M12 12c0 3.4-.9 6.4-2.7 8.9"/>'
@@ -1517,7 +1531,7 @@
     if (Reco) {
       if (dictee) { arreterDictee(true); return; }
       var tour = dictee = { r: null, voulu: true, garder: true }, base = zone.value ? zone.value.replace(/\s*$/, ' ') : '', vides = 0;
-      tour.ui = function () { bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Dicter'; };
+      tour.ui = function () { bouton.setAttribute('aria-pressed', 'false'); iconeMicro(bouton, 'micro', 'Dicter'); };
       var fin = function (msg, ton) { tour.voulu = false; if (dictee === tour) { dictee = null; tour.ui(); } if (msg) dire(etat, msg, ton); };
       var lancer = function () {
         var r = tour.r = new Reco(), dit = '';
@@ -1539,7 +1553,7 @@
         };
         r.start();
       };
-      try { lancer(); bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la dictée'; dire(etat, 'À l’écoute… parle normalement.'); }
+      try { lancer(); bouton.setAttribute('aria-pressed', 'true'); iconeMicro(bouton, 'stop', 'Arrêter la dictée'); dire(etat, 'À l’écoute… parle normalement.'); }
       catch (e) { fin('Dictée impossible sur ce navigateur.', 'ko'); }
       return;
     }
@@ -1550,13 +1564,13 @@
       rec.ondataavailable = function (e) { if (e.data && e.data.size) morceaux.push(e.data); };
       rec.onstop = function () {
         flux.getTracks().forEach(function (t) { t.stop(); });
-        enregistreur = null; bouton.setAttribute('aria-pressed', 'false'); bouton.textContent = 'Note vocale';
+        enregistreur = null; bouton.setAttribute('aria-pressed', 'false'); iconeMicro(bouton, 'onde', 'Note vocale');
         var blob = new Blob(morceaux, { type: rec.mimeType || 'audio/webm' }), s = Math.round((Date.now() - debut) / 1000);
         var lecteur = new FileReader();
         lecteur.onload = function () { B.audio = { donnees: String(lecteur.result), duree: Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') }; sauver(); dire(etat, 'Note vocale jointe (' + B.audio.duree + ').', 'ok'); };
         lecteur.readAsDataURL(blob);
       };
-      rec.start(); enregistreur = rec; bouton.setAttribute('aria-pressed', 'true'); bouton.textContent = '■ Arrêter la note';
+      rec.start(); enregistreur = rec; bouton.setAttribute('aria-pressed', 'true'); iconeMicro(bouton, 'stop', 'Arrêter la note');
       dire(etat, '● Enregistrement… (3 minutes au plus)');
       setTimeout(function () { if (enregistreur === rec) rec.stop(); }, AUDIO_MAX_MS);
     }, function () { dire(etat, 'Micro refusé : autorise-le dans le navigateur.', 'ko'); });
@@ -2041,9 +2055,9 @@
       + '<button type="button" class="sgn-type" data-a="type" data-v="idee" aria-pressed="' + (B.type === 'idee') + '">Une idée</button></div>'
       + htmlCaptures()
       + '<div class="sgn-rang">'
-      + '<button type="button" class="sgn-bouton" data-a="capturer"' + (B.captures.length >= ECRANS_MAX ? ' disabled' : '') + '>Capturer l’écran</button>'
-      + '<label class="sgn-bouton">Importer<input type="file" accept="image/*" multiple hidden data-a="importer"></label>'
-      + '<button type="button" class="sgn-bouton" data-a="micro" aria-pressed="false">' + (Reco ? 'Dicter' : 'Note vocale') + '</button></div>'
+      + '<button type="button" class="sgn-bouton sgn-ic" data-a="capturer" aria-label="Capturer l’écran" title="Capturer l’écran"' + (B.captures.length >= ECRANS_MAX ? ' disabled' : '') + '>' + icone('photo') + '</button>'
+      + '<label class="sgn-bouton sgn-ic" role="button" aria-label="Importer" title="Importer">' + icone('trombone') + '<input type="file" accept="image/*" multiple hidden data-a="importer"></label>'
+      + '<button type="button" class="sgn-bouton sgn-ic sgn-mic" data-a="micro" aria-pressed="false" aria-label="' + (Reco ? 'Dicter' : 'Note vocale') + '" title="' + (Reco ? 'Dicter' : 'Note vocale') + '">' + icone(Reco ? 'micro' : 'onde') + '</button></div>'
       + '<textarea class="sgn-texte" data-a="texte" placeholder="' + (B.type === 'idee' ? 'Ton idée, en quelques mots…' : 'Qu’est-ce qui ne va pas ? Qu’attendais-tu ?') + '">' + h(B.texte) + '</textarea>'
       + (B.audio ? '<p class="sgn-aide">Note vocale jointe (' + h(B.audio.duree) + ') · <a href="#" data-a="sansaudio">retirer</a></p>' : '')
       // Qui envoie : sans session ni clé, de quoi se connecter (l'empreinte, ou la clé d'équipe demandée une fois).
