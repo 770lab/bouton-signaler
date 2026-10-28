@@ -19,8 +19,18 @@ reprend (INSTALL.md, étape 1) ; ses propres règles (CLAUDE.md, AGENTS.md) ne p
      vocale quand le navigateur ne sait pas dicter ; carré pendant l'enregistrement, rouge). Ronds de 46 px, le micro dans la couleur
      de la page, le nom seulement en `aria-label` / `title`. Jamais de pastilles de texte pour ces gestes, nulle part ;
   6. le texte « Qu'est-ce qui ne va pas ? Qu'attendais-tu ? » ;
-  7. « Envoyer à Claude », plein, sur toute la largeur ;
-  8. en bas, qui est connecté (« Connexion par empreinte (…) · Se déconnecter »).
+  7. « Envoyer à Claude », plein, sur toute la largeur, en PILULE (coins tout ronds) avec son halo ;
+  8. en bas, qui est connecté (« Connecté : … (empreinte) · Se déconnecter »).
+- LA FENÊTRE EN VERRE, SUR TOUS LES BOUTONS (Yoann, 28/10/2026, sur la fenêtre de l'Atelier de gestion : « tout doit être comme atelier
+  gestion, surtout atelier 770 », puis « évidemment ça devient une règle pour tous les boutons signaler ») : la page derrière est
+  assombrie et floutée (`.sgn-fond` : rgba(4,7,15,.5) + blur 6 px) ; la fenêtre est une vitre dépolie (`.sgn-boite` : son fond à 84 %,
+  blur 24 px saturate 1,5, bord fin, coins 24 px en haut sur téléphone, 22 px partout sur ordinateur, ombre douce) ; « Un bug | Une
+  idée » et les ronds en verre (bord fin, ombre) ; le micro et « Envoyer à Claude » dans la couleur de la page (fond EXACT, reflet plus
+  clair en haut) avec leur halo ; le texte encadré de 2 px de la couleur, coins 14 px. Trois ronds, pas quatre (règle des 3 boutons
+  par rangée) : l'onde de la note vocale ne vient qu'à la place du micro, quand le navigateur ne sait pas dicter. On garde du modèle
+  « Mes demandes » en haut et la vignette de l'écran ENTIER. Les couleurs comptent peu (Yoann : « les couleurs c'est pas important,
+  ce qui est important c'est les logos ») : chaque bouton garde la sienne. Un bouton à part (gestion, KOULAM et le Studio, crm-lav, le
+  CRM de gestion) prend la même vitre, les mêmes ronds, la même pilule, le même bas.
 - LA COULEUR EST CELLE DE LA PAGE (liens, « Envoyer à Claude », le choix Bug / Idée, la vignette choisie, les filtres de « Mes
   demandes », « Mettre en ligne »). Le bouton la lit tout seul (`teinte()` de `widget/signaler.js`) : le réglage `couleur`, sinon une
   variable CSS de la page (`--signaler-couleur`, `--accent`, `--primary`, `--brand`…), sinon son bouton principal, sinon ses liens,

@@ -716,8 +716,12 @@ try {
       await x.p.waitForSelector('.sgn-carte');
       await x.p.click('[data-a="filtre"][data-v="toutes"]');
       pbs = pbs.concat(await controler(x.p));
-      const fondBoite = await x.p.$eval('.sgn-boite', (el) => getComputedStyle(el).backgroundColor);
+      // La fenêtre est EN VERRE (Yoann, 28/10/2026 : « tout doit être comme atelier gestion ») : sa couleur de base (--f) suit la page,
+      // la vitre laisse voir la page floutée derrière.
+      const fondBoite = await x.p.$eval('.sgn-boite', (el) => { const t = document.createElement('i'); t.style.background = 'var(--f)'; el.appendChild(t); const c = getComputedStyle(t).backgroundColor; t.remove(); return c; });
       ok(theme === 'dark' ? fondBoite === 'rgb(15, 23, 42)' : fondBoite === 'rgb(255, 255, 255)', nom + ' : la fenêtre est ' + (theme === 'dark' ? 'sombre' : 'claire') + ' (' + fondBoite + ')');
+      const vitre = await x.p.$eval('.sgn-boite', (el) => { const cs = getComputedStyle(el); return { flou: cs.backdropFilter || cs.webkitBackdropFilter || '', fond: cs.backgroundColor }; });
+      ok(/blur\(/.test(vitre.flou) && /\/ 0\.8|, 0\.8/.test(vitre.fond), nom + ' : la fenêtre est en verre (' + vitre.flou + ', ' + vitre.fond + ')');
       await capture(x.p, nom + '-demandes.png');
       await x.p.$eval('.sgn-boite', (el) => { el.scrollTop = el.scrollHeight; });
       await capture(x.p, nom + '-demandes-bas.png');
@@ -758,7 +762,7 @@ try {
       return p.evaluate(() => {
         const cs = (s, k) => getComputedStyle(document.querySelector(s))[k];
         return { lien: cs('.sgn-tete .sgn-lien', 'color'), plein: cs('.sgn-envoyer', 'backgroundColor'), texte: cs('.sgn-envoyer', 'color'),
-          fond: cs('.sgn-boite', 'backgroundColor'), choix: cs('.sgn-type[aria-pressed="true"]', 'borderTopColor'), teinte: window.Signaler.teinte() };
+          fond: (() => { const t = document.createElement('i'); t.style.background = 'var(--f)'; document.querySelector('.sgn-boite').appendChild(t); const v = getComputedStyle(t).backgroundColor; t.remove(); return v; })(), choix: cs('.sgn-type[aria-pressed="true"]', 'borderTopColor'), teinte: window.Signaler.teinte() };
       });
     };
     // a) Rien à lire sur la page (la démo n'a ni variable ni bouton plein) : le bleu du modèle, comme l'Atelier 770LAB.
@@ -806,7 +810,7 @@ try {
     await capture(x.p, 'couleur-page-sombre.png');
     // g) La page passe en clair pendant que la fenêtre est ouverte : la fenêtre suit.
     await x.p.emulateMedia({ colorScheme: 'light' });
-    await x.p.waitForFunction(() => getComputedStyle(document.querySelector('.sgn-boite')).backgroundColor === 'rgb(255, 255, 255)', null, { timeout: 3000 }).then(() => ok(true, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'), () => ok(false, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'));
+    await x.p.waitForFunction(() => { const b = document.querySelector('.sgn-boite'), t = document.createElement('i'); t.style.background = 'var(--f)'; b.appendChild(t); const v = getComputedStyle(t).backgroundColor; t.remove(); return v === 'rgb(255, 255, 255)'; }, null, { timeout: 3000 }).then(() => ok(true, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'), () => ok(false, 'la page passe en clair, fenêtre ouverte : la fenêtre suit'));
     ok(!x.erreursPage.length, 'aucune erreur JavaScript (page sombre)' + (x.erreursPage.length ? ' — ' + x.erreursPage.join(' ; ') : ''));
     await x.ctx.close();
   }
@@ -1353,7 +1357,7 @@ try {
     '« Activer l’empreinte » : une clé d’accès créée sur l’appareil (découvrable, rpId = localhost, le nom d’hôte de la page)');
   ok(appareils.length === 1 && sA && sA.qui === 'marie' && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(sA.session) && Math.abs(sA.exp - Date.now() - 30 * 24 * 3600000) < 120000,
     'le relais l’a vérifiée (attestation, UP + UV) et rangée (appareil:<id>) ; la session de 30 jours est gardée (signaler_session_v1, marie)');
-  ok(!(await A.p.$('.sgn-offre')) && /Connexion par empreinte \(marie\)/.test(await texte(A.p, '.sgn-pied')), 'la proposition disparaît ; le bas de la fenêtre dit « Connexion par empreinte (marie) »');
+  ok(!(await A.p.$('.sgn-offre')) && /Connecté : marie \(empreinte\)/.test(await texte(A.p, '.sgn-pied')), 'la proposition disparaît ; le bas de la fenêtre dit « Connecté : marie (empreinte) »');
   await envoyerTexte(A.p, 'Deuxième envoi : la session suffit');
   ok((await derniere('/signaler')).par === 'session', 'l’envoi suivant passe par la session (Authorization: Bearer), plus par la clé');
   await A.p.click('[data-a="deconnecter"]');
