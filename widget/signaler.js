@@ -452,6 +452,21 @@
     + '.sgn-envoyer:disabled{opacity:.55;cursor:default}'
     + '.sgn-etat{min-height:20px;margin-top:8px;font-size:14px}.sgn-etat.ko{color:var(--ko)}.sgn-etat.ok{color:var(--ok)}'
     + '.sgn-pied{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:6px}.sgn-pied .sgn-lien{padding:6px 0;font-size:14px;white-space:normal;text-align:left}'
+    // LA FENÊTRE EN VERRE, COMME L'ATELIER DE GESTION (Yoann, 28/10/2026 : « tout doit être comme atelier gestion », « ça devient une règle
+    // pour tous les boutons signaler ») : la vitre dépolie posée sur la page floutée, les ronds en verre, le micro et « Envoyer à Claude »
+    // dans la couleur de la page (fond exact, reflet plus clair en haut) avec leur halo, l'envoi en pilule.
+    + '.sgn-fond{background:rgba(4,7,15,.5);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}'
+    + '.sgn-boite{background:color-mix(in srgb,var(--f) 84%,transparent);-webkit-backdrop-filter:blur(24px) saturate(1.5);backdrop-filter:blur(24px) saturate(1.5);'
+    + 'border:1px solid color-mix(in srgb,var(--b) 80%,transparent);border-bottom:0;border-radius:24px 24px 0 0;box-shadow:0 -12px 40px -14px rgba(15,23,42,.4);padding:16px 18px calc(20px + env(safe-area-inset-bottom))}'
+    + '@media (min-width:640px){.sgn-boite{border-radius:22px;border-bottom:1px solid color-mix(in srgb,var(--b) 80%,transparent)}}'
+    + '.sgn-type{min-height:46px;border-radius:12px;background:color-mix(in srgb,var(--f) 70%,transparent);font-weight:600}'
+    + '.sgn-type[aria-pressed="true"]{border:2px solid var(--a);box-shadow:none}'
+    + '.sgn-ic{border:1px solid var(--b);background:color-mix(in srgb,var(--f) 78%,transparent);box-shadow:0 3px 8px -3px rgba(15,23,42,.28)}'
+    + '.sgn-mic{border:0;background-color:var(--p);background-image:linear-gradient(135deg,color-mix(in srgb,var(--p) 68%,#fff),var(--p));box-shadow:0 8px 20px -8px var(--p)}'
+    + '.sgn-texte{border:2px solid color-mix(in srgb,var(--a) 75%,transparent);border-radius:14px;background:color-mix(in srgb,var(--f) 55%,transparent)}'
+    + '.sgn-envoyer{border-radius:999px;padding:15px;font-size:17px;text-align:center;background-color:var(--p);background-image:linear-gradient(180deg,color-mix(in srgb,var(--p) 82%,#fff),var(--p));'
+    + 'box-shadow:0 12px 26px -12px var(--p),inset 0 1px 0 rgba(255,255,255,.22)}'
+    + '.sgn-pied{color:var(--d)}.sgn-qui{padding:6px 0;font-size:14px}'
     // « Mes demandes » : les filtres (une rangée de 3), puis une carte par demande, la plus récente en haut.
     + '.sgn-filtres{display:flex;gap:6px;margin-bottom:4px}'
     + '.sgn-filtre{flex:1 1 0;min-width:0;padding:8px 4px;border:1px solid var(--b);border-radius:999px;background:transparent;color:var(--t);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}'
@@ -2070,7 +2085,7 @@
   // Le bas de la fenêtre : qui est connecté par l'empreinte (et « Se déconnecter »), les réglages du rond lui-même.
   function htmlPied() {
     var s = sessionGardee(), l = [];
-    if (s) l.push('<span class="sgn-qui">Connexion par empreinte' + (s.qui ? ' (' + h(s.qui) + ')' : '') + '</span>'
+    if (s) l.push('<span class="sgn-qui">Connecté' + (s.qui ? ' : ' + h(s.qui) : '') + ' (empreinte)</span>'
       + '<button type="button" class="sgn-lien" data-a="deconnecter">Se déconnecter</button>');
     if (positionDeLaPage()) l.push('<button type="button" class="sgn-lien" data-a="remettre">Remettre le bouton à sa place</button>');
     return l.length ? '<div class="sgn-pied">' + l.join('') + '</div>' : '';
